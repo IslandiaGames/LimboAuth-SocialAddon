@@ -26,13 +26,16 @@ import java.util.Locale;
 import net.elytrium.commons.config.Placeholders;
 import net.elytrium.limboauth.socialaddon.Addon;
 import net.elytrium.limboauth.socialaddon.Settings;
+import net.elytrium.limboauth.socialaddon.SocialLinkMenu;
 
 public class ValidateLinkCommand implements SimpleCommand {
 
   private final Addon addon;
+  private final SocialLinkMenu linkMenu;
 
-  public ValidateLinkCommand(Addon addon) {
+  public ValidateLinkCommand(Addon addon, SocialLinkMenu linkMenu) {
     this.addon = addon;
+    this.linkMenu = linkMenu;
   }
 
   @Override
@@ -44,7 +47,7 @@ public class ValidateLinkCommand implements SimpleCommand {
       Player player = (Player) source;
 
       if (args.length == 0) {
-        this.sendUsage(player);
+        this.sendUsage(player, invocation.alias());
       } else {
         try {
           String username = player.getUsername().toLowerCase(Locale.ROOT);
@@ -64,10 +67,10 @@ public class ValidateLinkCommand implements SimpleCommand {
 
             this.addon.removeCode(username);
           } else {
-            this.sendUsage(player);
+            this.sendUsage(player, invocation.alias());
           }
         } catch (NumberFormatException ignored) {
-          this.sendUsage(player);
+          this.sendUsage(player, invocation.alias());
         } catch (SQLException ex) {
           throw new IllegalStateException(ex);
         }
@@ -75,9 +78,8 @@ public class ValidateLinkCommand implements SimpleCommand {
     }
   }
 
-  private void sendUsage(Player player) {
-    player.sendMessage(Addon.getSerializer()
-        .deserialize(Placeholders.replace(Settings.IMP.MAIN.STRINGS.LINK_CMD_USAGE, player.getUsername())));
+  private void sendUsage(Player player, String alias) {
+    player.sendMessage(this.linkMenu.usage(player, alias));
   }
 
   @Override

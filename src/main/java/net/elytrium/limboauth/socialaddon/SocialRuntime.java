@@ -68,6 +68,7 @@ final class SocialRuntime {
   }
 
   void start() {
+    this.logger.info("Social provider {} enabled={}", this.name, this.enabled);
     if (this.enabled) {
       this.lifecycle.scheduleWithFixedDelay(this::tick, 0, 5, TimeUnit.SECONDS);
     }

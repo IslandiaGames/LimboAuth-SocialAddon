@@ -117,6 +117,8 @@ public class Settings extends YamlConfig {
 
     public static class VK {
       public boolean ENABLED = false;
+      @Comment("Public HTTPS link to the bot or community messages; never include a token")
+      public String CONTACT = "";
       public String TOKEN = "1234567890";
     }
 
@@ -125,6 +127,8 @@ public class Settings extends YamlConfig {
 
     public static class DISCORD {
       public boolean ENABLED = false;
+      @Comment("Public HTTPS link to the bot; never include a token")
+      public String CONTACT = "";
       public String TOKEN = "1234567890";
 
       @Comment({
@@ -170,6 +174,8 @@ public class Settings extends YamlConfig {
     public static class TELEGRAM {
       @Comment("HTTPS API origin only; may point to the private Cloudflare Telegram relay")
       public String API_URL = "https://api.telegram.org";
+      @Comment("Public HTTPS link to the bot; never include a token")
+      public String CONTACT = "";
       public boolean ENABLED = false;
       public String TOKEN = "1234567890";
     }
@@ -216,7 +222,10 @@ public class Settings extends YamlConfig {
     public static class STRINGS {
 
       @Placeholders({"{NICKNAME}"})
-      public String LINK_CMD_USAGE = "{PRFX} Send '!account link {NICKNAME}' to our Social Bot{NL} VK: vk.com/123{NL} DS: Bot#0000{NL} TG: @bot";
+      public String LINK_CMD_USAGE = "{PRFX} Open a bot below and send '!account link {NICKNAME}'. Then confirm the code in game.";
+      public String LINK_NOT_CONFIGURED = "{PRFX} Account linking to this messenger is not configured.";
+      @Placeholders({"{NICKNAME}"})
+      public String LINK_CONTACT_HOVER = "Open the bot and send '!account link {NICKNAME}'";
       @Placeholders({"{NICKNAME}"})
       public String LINK_WRONG_CODE = "{PRFX} Wrong code, run '!account link {NICKNAME}' again";
       public String LINK_SUCCESS_GAME = "{PRFX} Social was successfully linked";
@@ -302,8 +311,8 @@ public class Settings extends YamlConfig {
 
       public String KEYBOARD_RESTORED = "Keyboard was restored";
 
-      @Comment("This message will be sent to the players without social-link right after their login")
-      public String LINK_ANNOUNCEMENT = "{PRFX} Hey! We recommend you to link a social network using the /addsocial command to secure your account";
+      @Comment("Header above the clickable bot links after the first backend connection; empty disables the invitation")
+      public String LINK_ANNOUNCEMENT = "{PRFX} Link your account to a messenger:";
 
       public String SOCIAL_EXCEPTION_CAUGHT = "An exception occurred while processing your request";
     }

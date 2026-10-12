@@ -1,7 +1,7 @@
 # Islandia SocialAddon
 
 Fork of Elytrium LimboAuth SocialAddon, based on commit
-`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.1`.
+`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.2`.
 
 ## Build and verification
 
@@ -10,6 +10,23 @@ compatibility; the Islandia deployment runs Velocity on Java 25. The build keeps
 the original fork's Checkstyle, SpotBugs and license checks. SpotBugs additionally
 resolves the matching official LimboAPI runtime JAR for relocated types omitted
 from the public API artifact; it is not packaged in SocialAddon.
+
+## Account linking
+
+Set `main.telegram.contact`, `main.discord.contact` and `main.vk.contact` to the
+public HTTPS bot links. Only enabled providers with valid contacts are shown.
+An unlinked player is invited once after the first real backend connection,
+including registration, password login and restored authentication sessions.
+Server switches do not repeat the invitation; an empty retained SOCIAL row does
+not suppress it. Buttons open the configured bot and explain the linking command
+in their hover text. Modern clients receive brand RGB colors; pre-1.16 clients
+receive distinct legacy colors. `/addtg`, `/addds` and `/addvk` without a code show
+the corresponding contact, while `/addsocial` shows all configured contacts.
+The existing challenge-code confirmation and opt-in 2FA remain unchanged.
+
+Provider availability is reported by the runtime status file, not by the command
+usage text. Startup logs list the enabled flags and report invalid or missing
+public contacts. Deploy the configuration together with the plugin sources.
 
 ## Provider lifecycle
 

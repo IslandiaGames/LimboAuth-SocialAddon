@@ -32,7 +32,6 @@ import net.elytrium.limboapi.api.player.LimboPlayer;
 import net.elytrium.limboauth.LimboAuth;
 import net.elytrium.limboauth.event.AuthUnregisterEvent;
 import net.elytrium.limboauth.event.PostAuthorizationEvent;
-import net.elytrium.limboauth.event.PostRegisterEvent;
 import net.elytrium.limboauth.event.PreAuthorizationEvent;
 import net.elytrium.limboauth.event.TaskEvent;
 import net.elytrium.limboauth.socialaddon.Addon;
@@ -54,7 +53,6 @@ public class LimboAuthListener {
   private final Component askedKick = Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.NOTIFY_ASK_KICK_MESSAGE);
   private final Component socialUnavailable = Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.SOCIAL_UNAVAILABLE);
   private final Component askedValidate = Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.NOTIFY_ASK_VALIDATE_GAME);
-  private final Component linkAnnouncement;
 
   private final Addon addon;
   private final LimboAuth plugin;
@@ -123,12 +121,6 @@ public class LimboAuthListener {
         this.socialManager.broadcastMessage(player, Settings.IMP.MAIN.STRINGS.NOTIFY_THANKS, this.keyboard);
       }
     });
-
-    if (Settings.IMP.MAIN.STRINGS.LINK_ANNOUNCEMENT == null || Settings.IMP.MAIN.STRINGS.LINK_ANNOUNCEMENT.isEmpty()) {
-      this.linkAnnouncement = null;
-    } else {
-      this.linkAnnouncement = Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.LINK_ANNOUNCEMENT);
-    }
   }
 
   @Subscribe
@@ -158,10 +150,6 @@ public class LimboAuthListener {
         this.authMainHook(player, event.getPlayer(), event);
       }
     }
-
-    if (!this.playerExists(proxyPlayer) && this.linkAnnouncement != null) {
-      proxyPlayer.sendMessage(this.linkAnnouncement);
-    }
   }
 
   public void authMainHook(SocialPlayer player, LimboPlayer limboPlayer, TaskEvent event) {
@@ -178,15 +166,6 @@ public class LimboAuthListener {
         this.yesNoButtons, AbstractSocial.ButtonVisibility.PREFER_INLINE);
 
     proxyPlayer.sendMessage(this.askedValidate);
-  }
-
-  @Subscribe
-  public void onRegisterCompleted(PostRegisterEvent event) {
-    if (this.linkAnnouncement != null) {
-      event.getPlayer()
-          .getProxyPlayer()
-          .sendMessage(this.linkAnnouncement);
-    }
   }
 
   @Subscribe
@@ -219,14 +198,6 @@ public class LimboAuthListener {
   @Subscribe
   public void onUnregister(AuthUnregisterEvent event) {
     this.addon.unregisterPlayer(event.getNickname());
-  }
-
-  private boolean playerExists(Player player) {
-    try {
-      return this.socialPlayerDao.idExists(player.getUsername().toLowerCase(Locale.ROOT));
-    } catch (SQLException e) {
-      throw new IllegalStateException(e);
-    }
   }
 
   private SocialPlayer queryPlayer(Player player) {

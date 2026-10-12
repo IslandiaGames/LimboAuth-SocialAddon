@@ -58,6 +58,7 @@ import net.elytrium.limboauth.socialaddon.command.ForceSocialUnlinkCommand;
 import net.elytrium.limboauth.socialaddon.command.ValidateLinkCommand;
 import net.elytrium.limboauth.socialaddon.listener.LimboAuthListener;
 import net.elytrium.limboauth.socialaddon.listener.ReloadListener;
+import net.elytrium.limboauth.socialaddon.listener.SocialLinkListener;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 import net.elytrium.limboauth.socialaddon.social.AbstractSocial;
 import net.elytrium.limboauth.socialaddon.utils.GeoIp;
@@ -578,6 +579,8 @@ public class Addon {
     this.server.getEventManager().register(this, new LimboAuthListener(this, this.plugin, this.dao, this.socialManager,
         this.keyboard, this.geoIp
     ));
+    SocialLinkMenu linkMenu = new SocialLinkMenu(Settings.IMP.MAIN, SERIALIZER, this.logger);
+    this.server.getEventManager().register(this, new SocialLinkListener(this.dao, linkMenu, this.logger));
     this.server.getEventManager().register(this, new ReloadListener(this));
     this.server.getEventManager().register(this, ProxyShutdownEvent.class, this::onProxyShutdown);
 
@@ -597,7 +600,7 @@ public class Addon {
 
     commandManager.register(
         Settings.IMP.MAIN.LINKAGE_MAIN_CMD,
-        new ValidateLinkCommand(this),
+        new ValidateLinkCommand(this, linkMenu),
         Settings.IMP.MAIN.LINKAGE_ALIAS_CMD.toArray(new String[0])
     );
     commandManager.register(
