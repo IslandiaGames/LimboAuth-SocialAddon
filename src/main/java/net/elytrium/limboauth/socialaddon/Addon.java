@@ -22,6 +22,7 @@ import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.permission.Tristate;
 import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.Plugin;
@@ -59,9 +60,6 @@ import net.elytrium.limboauth.socialaddon.listener.LimboAuthListener;
 import net.elytrium.limboauth.socialaddon.listener.ReloadListener;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 import net.elytrium.limboauth.socialaddon.social.AbstractSocial;
-import net.elytrium.limboauth.socialaddon.social.DiscordSocial;
-import net.elytrium.limboauth.socialaddon.social.TelegramSocial;
-import net.elytrium.limboauth.socialaddon.social.VKSocial;
 import net.elytrium.limboauth.socialaddon.utils.GeoIp;
 import net.elytrium.limboauth.thirdparty.com.j256.ormlite.dao.Dao;
 import net.elytrium.limboauth.thirdparty.com.j256.ormlite.dao.DaoManager;
@@ -157,12 +155,8 @@ public class Addon {
   public void onProxyInitialization(ProxyInitializeEvent event) throws SQLException {
     this.onReload();
     this.metricsFactory.make(this, 14770);
-    if (!UpdatesChecker.checkVersionByURL("https://raw.githubusercontent.com/Elytrium/LimboAuth-SocialAddon/master/VERSION", Settings.IMP.VERSION)) {
-      this.logger.error("****************************************");
-      this.logger.warn("The new LimboAuth update was found, please update.");
-      this.logger.error("https://github.com/Elytrium/LimboAuth-SocialAddon/releases/");
-      this.logger.error("****************************************");
-    }
+    this.logger.info("Loaded SocialAddon {}", Settings.IMP.VERSION);
+
   }
 
   @SuppressFBWarnings(value = "NP_NULL_ON_SOME_PATH", justification = "LEGACY_AMPERSAND can't be null in velocity.")
@@ -183,8 +177,9 @@ public class Addon {
       this.socialManager.stop();
     }
 
-    this.socialManager = new SocialManager(DiscordSocial::new, TelegramSocial::new, VKSocial::new);
-    this.socialManager.start();
+    String statusPath = System.getenv("ISLANDIA_SOCIAL_STATUS_FILE");
+    this.socialManager = new SocialManager(this.logger,
+        statusPath == null ? this.dataDirectory.resolve("status.json") : Path.of(statusPath));
 
     this.keyboard = List.of(
         List.of(
@@ -584,6 +579,7 @@ public class Addon {
         this.keyboard, this.geoIp
     ));
     this.server.getEventManager().register(this, new ReloadListener(this));
+    this.server.getEventManager().register(this, ProxyShutdownEvent.class, this::onProxyShutdown);
 
     if (this.purgeCacheTask != null) {
       this.purgeCacheTask.cancel();
@@ -609,6 +605,16 @@ public class Addon {
         new ForceSocialUnlinkCommand(this),
         Settings.IMP.MAIN.FORCE_UNLINK_ALIAS_CMD.toArray(new String[0])
     );
+    this.socialManager.start();
+  }
+
+  private void onProxyShutdown(ProxyShutdownEvent event) {
+    if (this.socialManager != null) {
+      this.socialManager.stop();
+    }
+    if (this.purgeCacheTask != null) {
+      this.purgeCacheTask.cancel();
+    }
   }
 
   private void checkCache(Map<?, ? extends CachedUser> userMap, long time) {

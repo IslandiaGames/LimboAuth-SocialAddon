@@ -9,7 +9,7 @@ plugins {
 }
 
 setGroup("net.elytrium")
-setVersion("1.0.11-SNAPSHOT")
+setVersion("1.0.11-islandia.1")
 
 compileJava {
     getOptions().setEncoding("UTF-8")
@@ -22,6 +22,14 @@ java {
 
 repositories {
     mavenCentral()
+    // LimboAuth references relocated runtime types absent from the public LimboAPI API JAR.
+    ivy {
+        name = "limboapi-runtime-analysis"
+        url = "https://github.com/Elytrium/LimboAPI/releases/download/"
+        patternLayout { artifact("[revision]/limboapi-[revision].[ext]") }
+        metadataSources { artifact() }
+        content { includeModule("net.elytrium.limboapi", "runtime-analysis") }
+    }
 
     maven {
         setName("elytrium-repo")
@@ -37,8 +45,14 @@ repositories {
     }
 }
 
+configurations {
+    mockitoAgent
+    limboApiAnalysis
+}
+
 dependencies {
     compileOnly("net.elytrium.limboapi:api:$limboapiVersion")
+    limboApiAnalysis("net.elytrium.limboapi:runtime-analysis:$limboapiVersion") { transitive = false }
     compileOnly("net.elytrium:limboauth:$limboauthVersion")
     compileOnly("net.elytrium.commons:config:$elytriumCommonsVersion")
     compileOnly("net.elytrium.commons:utils:$elytriumCommonsVersion")
@@ -58,10 +72,23 @@ dependencies {
 
     implementation("org.bstats:bstats-velocity:$bstatsVersion")
     compileOnly("com.github.spotbugs:spotbugs-annotations:$spotbugsVersion")
+
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testImplementation("org.assertj:assertj-core:3.27.3")
+    testImplementation("org.awaitility:awaitility:4.2.2")
+    testImplementation("org.mockito:mockito-core:5.18.0")
+    mockitoAgent("org.mockito:mockito-core:5.18.0") { transitive = false }
+    testImplementation("net.elytrium:limboauth:$limboauthVersion")
+    testImplementation("net.elytrium.limboapi:api:$limboapiVersion")
+    testImplementation("net.elytrium.commons:config:$elytriumCommonsVersion")
+    testImplementation("net.elytrium.commons:kyori:$elytriumCommonsVersion")
+    testImplementation("com.velocitypowered:velocity-api:$velocityVersion")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 shadowJar {
     getArchiveClassifier().set("")
+    getArchiveBaseName().set("LimboAuth-SocialAddon")
 
     exclude("META-INF/maven/**")
     exclude("META-INF/INFO_BIN")
@@ -102,6 +129,7 @@ checkstyle {
 }
 
 spotbugsMain {
+    auxClassPaths.from(configurations.limboApiAnalysis)
     setExcludeFilter(file("${this.getRootDir()}/config/spotbugs/suppressions.xml"))
 
     reports {
@@ -124,3 +152,8 @@ sourceSets.main.getJava().srcDir(getTasks().register("generateTemplates", Copy) 
 })
 
 assemble.dependsOn(shadowJar)
+
+test {
+    useJUnitPlatform()
+    jvmArgs("-javaagent:" + configurations.mockitoAgent.singleFile.absolutePath, "-Xshare:off")
+}

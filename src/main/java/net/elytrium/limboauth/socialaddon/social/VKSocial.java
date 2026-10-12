@@ -17,15 +17,14 @@
 
 package net.elytrium.limboauth.socialaddon.social;
 
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.vk.api.sdk.actions.LongPoll;
-import com.vk.api.sdk.client.TransportClient;
 import com.vk.api.sdk.client.VkApiClient;
 import com.vk.api.sdk.client.actors.GroupActor;
 import com.vk.api.sdk.exceptions.ApiException;
 import com.vk.api.sdk.exceptions.ClientException;
 import com.vk.api.sdk.exceptions.LongPollServerKeyExpiredException;
-import com.vk.api.sdk.httpclient.HttpTransportClient;
 import com.vk.api.sdk.objects.callback.longpoll.responses.GetLongPollEventsResponse;
 import com.vk.api.sdk.objects.groups.responses.GetLongPollServerResponse;
 import com.vk.api.sdk.objects.messages.Keyboard;
@@ -36,102 +35,114 @@ import com.vk.api.sdk.objects.messages.TemplateActionTypeNames;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import net.elytrium.limboauth.socialaddon.Settings;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 
 public class VKSocial extends AbstractSocial {
-  private final VkApiClient vk;
+  private final boolean enabled = Settings.IMP.MAIN.VK.ENABLED;
+  private final String token = Settings.IMP.MAIN.VK.TOKEN;
+  private volatile VkTransport transport;
+  private VkApiClient vk;
   private GroupActor actor;
-  private boolean polling;
+  private volatile boolean polling;
+  private volatile Thread thread;
+  private volatile long lastPoll;
 
   public VKSocial(SocialMessageListener onMessageReceived, SocialButtonListener onButtonClicked) {
     super(onMessageReceived, onButtonClicked);
-
-    TransportClient transportClient = new HttpTransportClient();
-    this.vk = new VkApiClient(transportClient);
   }
 
   @Override
   public boolean isEnabled() {
-    return Settings.IMP.MAIN.VK.ENABLED;
+    return this.enabled;
   }
 
   @Override
   public void stop() {
     this.polling = false;
+    this.lastPoll = 0;
+    if (this.thread != null) {
+      this.thread.interrupt();
+    }
+    if (this.transport != null) {
+      this.transport.close();
+    }
+  }
+
+  @Override
+  public boolean isRunning() {
+    return this.polling && this.thread != null && this.thread.isAlive();
+  }
+
+  @Override
+  public boolean isHealthy() {
+    long last = this.lastPoll;
+    return this.polling && last != 0 && System.nanoTime() - last < TimeUnit.SECONDS.toNanos(90);
   }
 
   @Override
   public void start() throws SocialInitializationException {
-    if (this.polling) {
-      return;
-    }
-
-    this.polling = true;
-
+    this.transport = new VkTransport();
+    this.vk = new VkApiClient(this.transport, new GsonBuilder().disableHtmlEscaping().create(), 1);
     try {
-      GroupActor tempActor = new GroupActor(0, Settings.IMP.MAIN.VK.TOKEN);
+      GroupActor tempActor = new GroupActor(0, this.token);
       int groupId = this.vk.groups().getByIdObjectLegacy(tempActor).groupIds(Collections.emptyList()).execute().get(0).getId();
-
-      this.actor = new GroupActor(groupId, Settings.IMP.MAIN.VK.TOKEN);
+      this.actor = new GroupActor(groupId, this.token);
       this.vk.groups().setLongPollSettings(this.actor, groupId).enabled(true)
-          .messageEvent(true)
-          .messageNew(true)
-          .execute();
-    } catch (ApiException | ClientException e) {
-      throw new SocialInitializationException(e);
+          .messageEvent(true).messageNew(true).execute();
+    } catch (ApiException | ClientException error) {
+      throw new SocialInitializationException(error);
     }
+    this.polling = true;
+    this.thread = new Thread(this::poll, "social-vk-poll");
+    this.thread.setDaemon(true);
+    this.thread.start();
+  }
 
-    new Thread(() -> {
-      while (this.polling) {
+  private void poll() {
+    int delay = 5;
+    while (this.polling && !Thread.currentThread().isInterrupted()) {
+      try {
+        GetLongPollServerResponse serverInfo = this.vk.groups().getLongPollServer(this.actor, this.actor.getGroupId()).execute();
+        LongPoll longPoll = new LongPoll(this.vk);
+        String ts = serverInfo.getTs();
+        while (this.polling && !Thread.currentThread().isInterrupted()) {
+          GetLongPollEventsResponse response = longPoll.getEvents(serverInfo.getServer(), serverInfo.getKey(), ts).waitTime(25).execute();
+          ts = response.getTs();
+          this.lastPoll = System.nanoTime();
+          delay = 5;
+          response.getUpdates().forEach(this::onUpdate);
+        }
+      } catch (LongPollServerKeyExpiredException expired) {
+        this.lastPoll = 0;
+      } catch (ClientException | ApiException | RuntimeException error) {
+        this.lastPoll = 0;
         try {
-          GetLongPollServerResponse serverInfo = this.vk.groups().getLongPollServer(this.actor, this.actor.getGroupId()).execute();
-          LongPoll longPoll = new LongPoll(this.vk);
-
-          String server = serverInfo.getServer();
-          String key = serverInfo.getKey();
-          String ts = serverInfo.getTs();
-          while (this.polling) {
-            GetLongPollEventsResponse longPollResponse = longPoll.getEvents(server, key, ts).waitTime(25).execute();
-            ts = longPollResponse.getTs();
-
-            longPollResponse.getUpdates().forEach(e -> {
-              if (e.has("type") && e.has("object")) {
-                String type = e.get("type").getAsString();
-                JsonObject object = e.get("object").getAsJsonObject();
-
-                if (object != null) {
-                  switch (type) {
-                    case "message_new": {
-                      this.onMessageNew(object);
-                      break;
-                    }
-                    case "message_event": {
-                      this.onMessageEvent(object);
-                      break;
-                    }
-                    default: {
-                      // ignored
-                      break;
-                    }
-                  }
-                }
-              }
-            });
-          }
-        } catch (LongPollServerKeyExpiredException ignored) {
-          // ignored
-        } catch (ClientException | ApiException e) {
-          e.printStackTrace(); // printStackTrace is necessary there
-          try {
-            Thread.sleep(5000);
-          } catch (InterruptedException ex) {
-            throw new RuntimeException(ex);
-          }
+          TimeUnit.SECONDS.sleep(delay);
+          delay = Math.min(60, delay * 2);
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
         }
       }
-    }).start();
+    }
+  }
+
+  private void onUpdate(JsonObject update) {
+    if (update.has("type") && update.has("object") && update.get("object").isJsonObject()) {
+      JsonObject object = update.getAsJsonObject("object");
+      switch (update.get("type").getAsString()) {
+        case "message_new":
+          this.onMessageNew(object);
+          break;
+        case "message_event":
+          this.onMessageEvent(object);
+          break;
+        default:
+          break;
+      }
+    }
   }
 
   @Override
@@ -205,9 +216,7 @@ public class VKSocial extends AbstractSocial {
                 .execute();
       }
     } catch (ClientException | ApiException e) {
-      if (Settings.IMP.MAIN.DEBUG) {
-        e.printStackTrace(); // printStackTrace is necessary there
-      }
+      throw new IllegalStateException("VK message delivery failed");
     }
   }
 
@@ -243,7 +252,7 @@ public class VKSocial extends AbstractSocial {
             .sendMessageEventAnswer(this.actor, eventId, userId, peerId)
             .execute();
       } catch (ClientException | ApiException e) {
-        e.printStackTrace(); // printStackTrace is necessary there
+        throw new IllegalStateException("VK callback acknowledgement failed");
       }
 
       if (payload.has("button")) {

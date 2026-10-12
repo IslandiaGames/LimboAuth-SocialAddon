@@ -21,6 +21,9 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import javax.security.auth.login.LoginException;
@@ -30,6 +33,8 @@ import net.dv8tion.jda.api.entities.Activity;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.events.ReadyEvent;
+import net.dv8tion.jda.api.events.ShutdownEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
@@ -40,11 +45,22 @@ import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.utils.cache.CacheFlag;
 import net.elytrium.limboauth.socialaddon.Settings;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
+import okhttp3.OkHttpClient;
 import org.jetbrains.annotations.NotNull;
 
 public class DiscordSocial extends AbstractSocial {
 
-  private JDA jda;
+  private final boolean enabled = Settings.IMP.MAIN.DISCORD.ENABLED;
+  private final String token = Settings.IMP.MAIN.DISCORD.TOKEN;
+  private final boolean memberCache = Settings.IMP.MAIN.DISCORD.GUILD_MEMBER_CACHE_ENABLED;
+  private final boolean activityEnabled = Settings.IMP.MAIN.DISCORD.ACTIVITY_ENABLED;
+  private final Activity.ActivityType activityType = Settings.IMP.MAIN.DISCORD.ACTIVITY_TYPE;
+  private final String activityName = Settings.IMP.MAIN.DISCORD.ACTIVITY_NAME;
+  private final String activityUrl = Settings.IMP.MAIN.DISCORD.ACTIVITY_URL;
+  private final List<String> addedRoles = List.copyOf(Settings.IMP.MAIN.DISCORD.ON_PLAYER_ADDED);
+  private final List<String> removedRoles = List.copyOf(Settings.IMP.MAIN.DISCORD.ON_PLAYER_REMOVED);
+  private final List<Object> requiredRoles = List.copyOf(Settings.IMP.MAIN.DISCORD.REQUIRED_ROLES);
+  private volatile JDA jda;
   private List<RoleAction> onPlayerAddedRoleActions;
   private List<RoleAction> onPlayerRemovedRoleActions;
 
@@ -55,27 +71,47 @@ public class DiscordSocial extends AbstractSocial {
   public void start() throws SocialInitializationException {
     try {
       JDABuilder jdaBuilder;
-      if (Settings.IMP.MAIN.DISCORD.GUILD_MEMBER_CACHE_ENABLED) {
-        jdaBuilder = JDABuilder.create(Settings.IMP.MAIN.DISCORD.TOKEN, GatewayIntent.DIRECT_MESSAGES, GatewayIntent.GUILD_MEMBERS);
+      if (this.memberCache) {
+        jdaBuilder = JDABuilder.create(this.token, GatewayIntent.DIRECT_MESSAGES, GatewayIntent.GUILD_MEMBERS);
       } else {
-        jdaBuilder = JDABuilder.create(Settings.IMP.MAIN.DISCORD.TOKEN, GatewayIntent.DIRECT_MESSAGES);
+        jdaBuilder = JDABuilder.create(this.token, GatewayIntent.DIRECT_MESSAGES);
       }
 
-      this.jda = jdaBuilder.disableCache(CacheFlag.ACTIVITY, CacheFlag.VOICE_STATE, CacheFlag.EMOTE, CacheFlag.CLIENT_STATUS, CacheFlag.ONLINE_STATUS)
-          .setActivity(Settings.IMP.MAIN.DISCORD.ACTIVITY_ENABLED
-              ? Activity.of(Settings.IMP.MAIN.DISCORD.ACTIVITY_TYPE, Settings.IMP.MAIN.DISCORD.ACTIVITY_NAME, Settings.IMP.MAIN.DISCORD.ACTIVITY_URL)
-              : null)
-          .build().awaitReady();
-    } catch (LoginException | InterruptedException e) {
-      throw new SocialInitializationException(e);
+      CountDownLatch ready = new CountDownLatch(1);
+      ListenerAdapter connection = new ListenerAdapter() {
+        @Override
+        public void onReady(@NotNull ReadyEvent event) {
+          ready.countDown();
+        }
+
+        @Override
+        public void onShutdown(@NotNull ShutdownEvent event) {
+          ready.countDown();
+        }
+      };
+      this.jda = jdaBuilder.addEventListeners(connection)
+          .disableCache(CacheFlag.ACTIVITY, CacheFlag.VOICE_STATE, CacheFlag.EMOTE, CacheFlag.CLIENT_STATUS, CacheFlag.ONLINE_STATUS)
+          .setActivity(this.activityEnabled ? Activity.of(this.activityType, this.activityName, this.activityUrl) : null)
+          .setHttpClientBuilder(new OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS)
+              .readTimeout(15, TimeUnit.SECONDS).callTimeout(20, TimeUnit.SECONDS))
+          .build();
+      if (!ready.await(45, TimeUnit.SECONDS) || this.jda.getStatus() != JDA.Status.CONNECTED) {
+        throw new TimeoutException("Discord initialization did not complete");
+      }
+      this.jda.removeEventListener(connection);
+    } catch (LoginException | InterruptedException | TimeoutException error) {
+      if (error instanceof InterruptedException) {
+        Thread.currentThread().interrupt();
+      }
+      throw new SocialInitializationException(error);
     }
 
-    this.jda.addEventListener(new Listener(this.jda, this::proceedMessage, this::proceedButton));
-    this.onPlayerAddedRoleActions = Settings.IMP.MAIN.DISCORD.ON_PLAYER_ADDED.stream()
+    this.jda.addEventListener(new Listener(this.jda, this.requiredRoles, this::proceedMessage, this::proceedButton));
+    this.onPlayerAddedRoleActions = this.addedRoles.stream()
         .map(e -> e.split(" "))
         .map(RoleAction::new)
         .collect(Collectors.toList());
-    this.onPlayerRemovedRoleActions = Settings.IMP.MAIN.DISCORD.ON_PLAYER_REMOVED.stream()
+    this.onPlayerRemovedRoleActions = this.removedRoles.stream()
         .map(e -> e.split(" "))
         .map(RoleAction::new)
         .collect(Collectors.toList());
@@ -83,14 +119,24 @@ public class DiscordSocial extends AbstractSocial {
 
   @Override
   public boolean isEnabled() {
-    return Settings.IMP.MAIN.DISCORD.ENABLED;
+    return this.enabled;
   }
 
   @Override
   public void stop() {
     if (this.jda != null) {
-      this.jda.shutdown();
+      this.jda.shutdownNow();
     }
+  }
+
+  @Override
+  public boolean isRunning() {
+    return this.jda != null && this.jda.getStatus() != JDA.Status.SHUTDOWN && this.jda.getStatus() != JDA.Status.FAILED_TO_LOGIN;
+  }
+
+  @Override
+  public boolean isHealthy() {
+    return this.jda != null && this.jda.getStatus() == JDA.Status.CONNECTED;
   }
 
   @Override
@@ -110,7 +156,7 @@ public class DiscordSocial extends AbstractSocial {
 
   @Override
   public void sendMessage(Long id, String content, List<List<ButtonItem>> buttons, ButtonVisibility visibility) {
-    User user = this.jda.retrieveUserById(id).complete();
+    User user = this.jda.retrieveUserById(id).timeout(15, TimeUnit.SECONDS).complete();
     if (user == null) {
       return;
     }
@@ -179,9 +225,9 @@ public class DiscordSocial extends AbstractSocial {
     private final SocialButtonListener onButtonClicked;
 
     @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
-    Listener(JDA jda, SocialMessageListener onMessageReceived, SocialButtonListener onButtonClicked) {
+    Listener(JDA jda, List<Object> roles, SocialMessageListener onMessageReceived, SocialButtonListener onButtonClicked) {
       List<Role> list = new ArrayList<>();
-      for (Object requiredRole : Settings.IMP.MAIN.DISCORD.REQUIRED_ROLES) {
+      for (Object requiredRole : roles) {
         Role roleById;
         if (requiredRole instanceof Long) {
           roleById = jda.getRoleById((Long) requiredRole);

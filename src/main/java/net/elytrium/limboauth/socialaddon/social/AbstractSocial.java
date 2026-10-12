@@ -45,6 +45,12 @@ public abstract class AbstractSocial {
 
   public abstract void stop();
 
+  public abstract boolean isHealthy();
+
+  public boolean isRunning() {
+    return true;
+  }
+
   public abstract String getDbField();
 
   public abstract void onPlayerAdded(Long id);

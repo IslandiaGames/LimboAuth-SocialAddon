@@ -168,6 +168,8 @@ public class Settings extends YamlConfig {
     public MAIN.TELEGRAM TELEGRAM;
 
     public static class TELEGRAM {
+      @Comment("HTTPS API origin only; may point to the private Cloudflare Telegram relay")
+      public String API_URL = "https://api.telegram.org";
       public boolean ENABLED = false;
       public String TOKEN = "1234567890";
     }
@@ -242,6 +244,7 @@ public class Settings extends YamlConfig {
       public String NOTIFY_ASK_KICK_MESSAGE = "{PRFX} You were kicked by the Social";
       @Placeholders({"{IP}", "{LOCATION}"})
       public String NOTIFY_ASK_VALIDATE = "❔ Someone tries to join the server.{NL}🌐 IP: {IP} {LOCATION}{NL}Is it you?";
+      public String SOCIAL_UNAVAILABLE = "{PRFX} Your 2FA provider is temporarily unavailable. Please try again later.";
       public String NOTIFY_ASK_VALIDATE_GAME = "{PRFX} You have 2FA enabled, check your social and validate your login!";
       public String NOTIFY_ASK_YES = "It's me";
       public String NOTIFY_ASK_NO = "It's not me";

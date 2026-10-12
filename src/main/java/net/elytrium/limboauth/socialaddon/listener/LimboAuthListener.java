@@ -52,6 +52,7 @@ public class LimboAuthListener {
 
   private final Component blockedAccount = Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.BLOCK_KICK_MESSAGE);
   private final Component askedKick = Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.NOTIFY_ASK_KICK_MESSAGE);
+  private final Component socialUnavailable = Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.SOCIAL_UNAVAILABLE);
   private final Component askedValidate = Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.NOTIFY_ASK_VALIDATE_GAME);
   private final Component linkAnnouncement;
 
@@ -165,6 +166,10 @@ public class LimboAuthListener {
 
   public void authMainHook(SocialPlayer player, LimboPlayer limboPlayer, TaskEvent event) {
     Player proxyPlayer = limboPlayer.getProxyPlayer();
+    if (!this.socialManager.canDeliver(player)) {
+      event.completeAndCancel(this.socialUnavailable);
+      return;
+    }
     this.sessions.put(player.getLowercaseNickname(), new AuthSession(event, limboPlayer));
 
     String ip = proxyPlayer.getRemoteAddress().getAddress().getHostAddress();

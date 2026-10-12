@@ -17,37 +17,42 @@
 
 package net.elytrium.limboauth.socialaddon;
 
-import java.util.HashMap;
-import java.util.LinkedList;
+import java.nio.file.Path;
+import java.time.Clock;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 import net.elytrium.limboauth.socialaddon.social.AbstractSocial;
+import net.elytrium.limboauth.socialaddon.social.DiscordSocial;
 import net.elytrium.limboauth.socialaddon.social.SocialButtonListenerAdapter;
-import net.elytrium.limboauth.socialaddon.social.SocialInitializationException;
 import net.elytrium.limboauth.socialaddon.social.SocialMessageListenerAdapter;
+import net.elytrium.limboauth.socialaddon.social.TelegramSocial;
+import net.elytrium.limboauth.socialaddon.social.VKSocial;
+import org.slf4j.Logger;
 
 public class SocialManager {
 
-  private final LinkedList<AbstractSocial> socialList;
-  private final LinkedList<SocialMessageListenerAdapter> messageEvents = new LinkedList<>();
-  private final HashMap<String, SocialButtonListenerAdapter> buttonEvents = new HashMap<>();
-  private final HashMap<String, String> buttonIdMap = new HashMap<>();
+  private final List<SocialRuntime> providers;
+  private final List<SocialMessageListenerAdapter> messageEvents = new CopyOnWriteArrayList<>();
+  private final Map<String, SocialButtonListenerAdapter> buttonEvents = new ConcurrentHashMap<>();
+  private final Map<String, String> buttonIdMap = new ConcurrentHashMap<>();
+  private final SocialStatusWriter status;
+  private volatile boolean stopped;
 
-  public SocialManager(AbstractSocial.Constructor... socialList) {
-    this.socialList = new LinkedList<>();
-    for (AbstractSocial.Constructor function : socialList) {
-      try {
-        AbstractSocial social = function.newInstance(this::onMessageReceived, this::onButtonClicked);
-        if (social.isEnabled()) {
-          this.socialList.add(social);
-        }
-      } catch (SocialInitializationException e) {
-        e.printStackTrace(); // printStackTrace is necessary there
-      }
-    }
+  public SocialManager(Logger logger, Path statusPath) {
+    this.providers = List.of(
+        new SocialRuntime("discord", new DiscordSocial(this::onMessageReceived, this::onButtonClicked), logger),
+        new SocialRuntime("telegram", new TelegramSocial(this::onMessageReceived, this::onButtonClicked), logger),
+        new SocialRuntime("vk", new VKSocial(this::onMessageReceived, this::onButtonClicked), logger));
+    this.status = new SocialStatusWriter(statusPath, this.providers, logger, Clock.systemUTC());
   }
 
   private void onMessageReceived(String dbField, Long id, String message) {
+    if (this.stopped) {
+      return;
+    }
     String buttonId = this.buttonIdMap.get(message);
     if (buttonId != null) {
       this.onButtonClicked(dbField, id, buttonId);
@@ -66,6 +71,9 @@ public class SocialManager {
   }
 
   private void onButtonClicked(String dbField, Long id, String buttonId) {
+    if (this.stopped) {
+      return;
+    }
     SocialButtonListenerAdapter buttonListenerAdapter = this.buttonEvents.get(buttonId);
     if (buttonListenerAdapter != null) {
       try {
@@ -92,36 +100,37 @@ public class SocialManager {
   }
 
   public void start() {
-    for (AbstractSocial social : this.socialList) {
-      try {
-        social.start();
-      } catch (SocialInitializationException e) {
-        e.printStackTrace(); // printStackTrace is necessary there
-      }
-    }
+    this.providers.forEach(SocialRuntime::start);
+    this.status.start();
   }
 
   public void stop() {
-    this.socialList.forEach(AbstractSocial::stop);
+    this.stopped = true;
+    this.providers.forEach(SocialRuntime::stop);
+    this.status.stop();
+  }
+
+  public boolean canDeliver(SocialPlayer player) {
+    return this.providers.stream().anyMatch(provider -> provider.isAvailable() && provider.getSocial().canSend(player));
   }
 
   public void unregisterHook(SocialPlayer player) {
-    this.socialList.stream()
-        .filter(e -> e.canSend(player))
-        .forEach(e -> e.onPlayerRemoved(player));
+    this.providers.stream()
+        .filter(e -> e.getSocial().canSend(player))
+        .forEach(e -> e.execute(social -> social.onPlayerRemoved(player)));
   }
 
   public void unregisterHook(String dbField, SocialPlayer player) {
-    this.socialList.stream()
-        .filter(e -> e.canSend(player))
-        .filter(e -> e.getDbField().equals(dbField))
-        .forEach(e -> e.onPlayerRemoved(player));
+    this.providers.stream()
+        .filter(e -> e.getSocial().canSend(player))
+        .filter(e -> e.getSocial().getDbField().equals(dbField))
+        .forEach(e -> e.execute(social -> social.onPlayerRemoved(player)));
   }
 
   public void registerHook(String dbField, Long id) {
-    this.socialList.stream()
-        .filter(e -> e.getDbField().equals(dbField))
-        .forEach(e -> e.onPlayerAdded(id));
+    this.providers.stream()
+        .filter(e -> e.getSocial().getDbField().equals(dbField))
+        .forEach(e -> e.execute(social -> social.onPlayerAdded(id)));
   }
 
   public void registerKeyboard(List<List<AbstractSocial.ButtonItem>> keyboard) {
@@ -142,15 +151,15 @@ public class SocialManager {
 
   public void broadcastMessage(SocialPlayer player, String message,
                                List<List<AbstractSocial.ButtonItem>> item, AbstractSocial.ButtonVisibility visibility) {
-    this.socialList.stream()
-        .filter(e -> e.canSend(player))
-        .forEach(e -> e.sendMessage(player, message, item, visibility));
+    this.providers.stream()
+        .filter(e -> e.getSocial().canSend(player))
+        .forEach(e -> e.execute(social -> social.sendMessage(player, message, item, visibility)));
   }
 
   public void broadcastMessage(SocialPlayer player, String message) {
-    this.socialList.stream()
-        .filter(e -> e.canSend(player))
-        .forEach(e -> e.sendMessage(player, message));
+    this.providers.stream()
+        .filter(e -> e.getSocial().canSend(player))
+        .forEach(e -> e.execute(social -> social.sendMessage(player, message)));
   }
 
   public void broadcastMessage(String dbField, Long id, String message, List<List<AbstractSocial.ButtonItem>> item) {
@@ -160,14 +169,14 @@ public class SocialManager {
 
   public void broadcastMessage(String dbField, Long id, String message,
                                List<List<AbstractSocial.ButtonItem>> item, AbstractSocial.ButtonVisibility visibility) {
-    this.socialList.stream()
-        .filter(e -> e.getDbField().equals(dbField))
-        .forEach(e -> e.sendMessage(id, message, item, visibility));
+    this.providers.stream()
+        .filter(e -> e.getSocial().getDbField().equals(dbField))
+        .forEach(e -> e.execute(social -> social.sendMessage(id, message, item, visibility)));
   }
 
   public void broadcastMessage(String dbField, Long id, String message) {
-    this.socialList.stream()
-        .filter(e -> e.getDbField().equals(dbField))
-        .forEach(e -> e.sendMessage(id, message));
+    this.providers.stream()
+        .filter(e -> e.getSocial().getDbField().equals(dbField))
+        .forEach(e -> e.execute(social -> social.sendMessage(id, message)));
   }
 }
