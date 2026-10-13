@@ -39,7 +39,9 @@ final class VkTransport implements TransportClient, AutoCloseable {
       request.header(header.getName(), header.getValue());
     }
     request.method(method, body == null ? null : RequestBody.create(MediaType.get(type), body));
-    return new ClientResponse(200, this.http.execute(request.build()), Map.of());
+    SocialHttpClient.HttpResponse response = this.http.executeResponse(request.build());
+    Map<String, String> responseHeaders = response.contentType().isEmpty() ? Map.of() : Map.of("Content-Type", response.contentType());
+    return new ClientResponse(response.statusCode(), response.body(), responseHeaders);
   }
 
   @Override

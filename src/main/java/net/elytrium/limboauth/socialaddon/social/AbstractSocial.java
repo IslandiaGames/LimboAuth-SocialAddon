@@ -23,6 +23,8 @@ import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 
 public abstract class AbstractSocial {
 
+  private volatile String publicContact = "";
+  private volatile String failureReason = "not_connected";
   private final SocialMessageListener onMessageReceived;
   private final SocialButtonListener onButtonClicked;
 
@@ -37,6 +39,26 @@ public abstract class AbstractSocial {
 
   protected void proceedButton(String dbField, Long id, String message) {
     this.onButtonClicked.accept(dbField, id, message);
+  }
+
+  public final String getPublicContact() {
+    return this.publicContact;
+  }
+
+  protected final void setPublicContact(String contact) {
+    this.publicContact = contact;
+  }
+
+  public final String getFailureReason() {
+    return this.failureReason;
+  }
+
+  protected final void recordFailure(Throwable error) {
+    this.failureReason = SocialFailureReason.describe(error);
+  }
+
+  protected final void clearFailure() {
+    this.failureReason = "none";
   }
 
   public abstract boolean isEnabled();

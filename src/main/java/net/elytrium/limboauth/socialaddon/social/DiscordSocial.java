@@ -98,6 +98,7 @@ public class DiscordSocial extends AbstractSocial {
       if (!ready.await(45, TimeUnit.SECONDS) || this.jda.getStatus() != JDA.Status.CONNECTED) {
         throw new TimeoutException("Discord initialization did not complete");
       }
+      this.setPublicContact("https://discord.com/users/" + this.jda.getSelfUser().getId());
       this.jda.removeEventListener(connection);
     } catch (LoginException | InterruptedException | TimeoutException error) {
       if (error instanceof InterruptedException) {

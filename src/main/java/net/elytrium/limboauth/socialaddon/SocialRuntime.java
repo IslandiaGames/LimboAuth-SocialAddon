@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import net.elytrium.limboauth.socialaddon.social.AbstractSocial;
+import net.elytrium.limboauth.socialaddon.social.SocialFailureReason;
 import org.slf4j.Logger;
 
 /** Owns one provider; another provider never waits for its network or retry. */
@@ -40,6 +41,7 @@ final class SocialRuntime {
   private volatile boolean closed;
   private volatile boolean started;
   private volatile String state;
+  private String lastFailure = "";
   private final LongSupplier clock;
   private long retryAt;
   private int retrySeconds = 5;
@@ -83,7 +85,7 @@ final class SocialRuntime {
       this.started = false;
     }
     if (this.started) {
-      this.transition(this.social.isHealthy() ? "available" : "unavailable");
+      this.transition(this.social.isHealthy() ? "available" : "unavailable", this.social.getFailureReason());
       return;
     }
     if (this.clock.getAsLong() < this.retryAt) {
@@ -97,24 +99,27 @@ final class SocialRuntime {
       }
       this.started = true;
       this.retrySeconds = 5;
-      this.transition(this.social.isHealthy() ? "available" : "unavailable");
+      this.transition(this.social.isHealthy() ? "available" : "unavailable", this.social.getFailureReason());
     } catch (Exception error) {
       this.social.stop();
       if (!this.closed) {
-        this.transition("unavailable");
+        this.transition("unavailable", "initialization_" + SocialFailureReason.describe(error));
         this.retryAt = this.clock.getAsLong() + TimeUnit.SECONDS.toNanos(this.retrySeconds);
         this.retrySeconds = Math.min(60, this.retrySeconds * 2);
       }
     }
   }
 
-  private void transition(String next) {
-    if (!next.equals(this.state)) {
+  private void transition(String next, String reason) {
+    String failure = "available".equals(next) ? "" : reason;
+    if (!next.equals(this.state) || !failure.equals(this.lastFailure)) {
+      this.lastFailure = failure;
       this.state = next;
       if ("available".equals(next)) {
         this.logger.info("Social provider {} is available", this.name);
       } else {
-        this.logger.warn("Social provider {} is unavailable; proxy startup is not blocked, authentication remains protected", this.name);
+        this.logger.warn("Social provider {} is unavailable reason={}; proxy startup is not blocked, authentication remains protected",
+            this.name, failure);
       }
     }
   }

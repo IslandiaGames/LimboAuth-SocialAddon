@@ -18,15 +18,18 @@
 package net.elytrium.limboauth.socialaddon;
 
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.time.Clock;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 import net.elytrium.limboauth.socialaddon.social.AbstractSocial;
 import net.elytrium.limboauth.socialaddon.social.DiscordSocial;
 import net.elytrium.limboauth.socialaddon.social.SocialButtonListenerAdapter;
+import net.elytrium.limboauth.socialaddon.social.SocialFailureReason;
 import net.elytrium.limboauth.socialaddon.social.SocialMessageListenerAdapter;
 import net.elytrium.limboauth.socialaddon.social.TelegramSocial;
 import net.elytrium.limboauth.socialaddon.social.VKSocial;
@@ -39,9 +42,11 @@ public class SocialManager {
   private final Map<String, SocialButtonListenerAdapter> buttonEvents = new ConcurrentHashMap<>();
   private final Map<String, String> buttonIdMap = new ConcurrentHashMap<>();
   private final SocialStatusWriter status;
+  private final Logger logger;
   private volatile boolean stopped;
 
   public SocialManager(Logger logger, Path statusPath) {
+    this.logger = logger;
     this.providers = List.of(
         new SocialRuntime("discord", new DiscordSocial(this::onMessageReceived, this::onButtonClicked), logger),
         new SocialRuntime("telegram", new TelegramSocial(this::onMessageReceived, this::onButtonClicked), logger),
@@ -49,13 +54,14 @@ public class SocialManager {
     this.status = new SocialStatusWriter(statusPath, this.providers, logger, Clock.systemUTC());
   }
 
-  private void onMessageReceived(String dbField, Long id, String message) {
+  void onMessageReceived(String dbField, Long id, String message) {
     if (this.stopped) {
       return;
     }
     String buttonId = this.buttonIdMap.get(message);
-    if (buttonId != null) {
+    if (buttonId != null && this.buttonEvents.containsKey(buttonId)) {
       this.onButtonClicked(dbField, id, buttonId);
+      return;
     }
 
     this.messageEvents.forEach(event -> {
@@ -63,9 +69,7 @@ public class SocialManager {
         event.accept(dbField, id, message);
       } catch (Exception e) {
         this.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.SOCIAL_EXCEPTION_CAUGHT);
-        if (Settings.IMP.MAIN.DEBUG) {
-          e.printStackTrace(); // printStackTrace is necessary there
-        }
+        this.logRequestFailure(dbField, "message", e);
       }
     });
   }
@@ -80,11 +84,29 @@ public class SocialManager {
         buttonListenerAdapter.accept(dbField, id);
       } catch (Exception e) {
         this.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.SOCIAL_EXCEPTION_CAUGHT);
-        if (Settings.IMP.MAIN.DEBUG) {
-          e.printStackTrace(); // printStackTrace is necessary there
-        }
+        this.logRequestFailure(dbField, "button", e);
       }
     }
+  }
+
+  private void logRequestFailure(String dbField, String operation, Exception error) {
+    Throwable current = error;
+    String sqlState = "none";
+    int sqlCode = 0;
+    for (int depth = 0; depth < 8; depth++) {
+      if (current instanceof SQLException sql) {
+        String state = sql.getSQLState();
+        sqlState = state != null && state.matches("[A-Z0-9]{5}") ? state : "unknown";
+        sqlCode = sql.getErrorCode();
+        break;
+      }
+      if (current.getCause() == null || current.getCause() == current) {
+        break;
+      }
+      current = current.getCause();
+    }
+    this.logger.warn("Social request failed provider={} operation={} reason={} sql_state={} sql_code={}",
+        dbField, operation, SocialFailureReason.describe(error), sqlState, sqlCode);
   }
 
   public void addMessageEvent(SocialMessageListenerAdapter event) {
@@ -108,6 +130,15 @@ public class SocialManager {
     this.stopped = true;
     this.providers.forEach(SocialRuntime::stop);
     this.status.stop();
+  }
+
+  public Optional<String> getPublicContact(String dbField) {
+    if (this.stopped) {
+      return Optional.empty();
+    }
+    return this.providers.stream().filter(SocialRuntime::isEnabled)
+        .map(SocialRuntime::getSocial).filter(social -> social.getDbField().equals(dbField))
+        .map(AbstractSocial::getPublicContact).filter(contact -> !contact.isBlank()).findFirst();
   }
 
   public boolean canDeliver(SocialPlayer player) {

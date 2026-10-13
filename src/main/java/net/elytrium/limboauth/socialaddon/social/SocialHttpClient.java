@@ -42,16 +42,27 @@ public final class SocialHttpClient implements AutoCloseable {
   }
 
   public String execute(Request request) throws IOException {
+    HttpResponse response = this.executeResponse(request);
+    if (response.statusCode() < 200 || response.statusCode() >= 300) {
+      throw new IOException("Social API request failed: HTTP " + response.statusCode());
+    }
+    return response.body();
+  }
+
+  HttpResponse executeResponse(Request request) throws IOException {
     try (Response response = this.client.newCall(request).execute()) {
-      if (!response.isSuccessful() || response.body() == null) {
+      if (response.body() == null) {
         throw new IOException("Social API request failed: HTTP " + response.code());
       }
       byte[] bytes = response.body().byteStream().readNBytes(RESPONSE_LIMIT + 1);
       if (bytes.length > RESPONSE_LIMIT) {
         throw new IOException("Social API response exceeds size limit");
       }
-      return new String(bytes, StandardCharsets.UTF_8);
+      return new HttpResponse(response.code(), response.header("Content-Type", ""), new String(bytes, StandardCharsets.UTF_8));
     }
+  }
+
+  record HttpResponse(int statusCode, String contentType, String body) {
   }
 
   @Override

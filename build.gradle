@@ -9,7 +9,7 @@ plugins {
 }
 
 setGroup("net.elytrium")
-setVersion("1.0.11-islandia.2")
+setVersion("1.0.11-islandia.5")
 
 compileJava {
     getOptions().setEncoding("UTF-8")
@@ -84,6 +84,7 @@ dependencies {
     testImplementation("net.elytrium.commons:kyori:$elytriumCommonsVersion")
     testImplementation("com.velocitypowered:velocity-api:$velocityVersion")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testRuntimeOnly("org.postgresql:postgresql:42.7.7")
 }
 
 shadowJar {

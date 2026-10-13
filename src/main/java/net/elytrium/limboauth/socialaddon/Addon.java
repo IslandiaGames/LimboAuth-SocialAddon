@@ -37,7 +37,6 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.io.File;
 import java.nio.file.Path;
 import java.sql.SQLException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -114,6 +113,8 @@ public class Addon {
   private List<List<AbstractSocial.ButtonItem>> keyboard;
   private GeoIp geoIp;
   private ScheduledTask purgeCacheTask;
+  private ScheduledTask linkInvitationTask;
+  private SocialLinkListener linkListener;
 
   static {
     Objects.requireNonNull(org.apache.commons.logging.impl.LogFactoryImpl.class);
@@ -202,131 +203,116 @@ public class Addon {
 
     this.socialManager.registerKeyboard(this.keyboard);
 
-    this.socialManager.addMessageEvent((dbField, id, message) -> {
-      String lowercaseMessage = message.toLowerCase(Locale.ROOT);
-      if (Settings.IMP.MAIN.START_MESSAGES.contains(lowercaseMessage)) {
-        this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.START_REPLY);
-        return;
-      }
+    this.socialManager.addMessageEvent(new SocialBotMessageListener(
+        Settings.IMP.MAIN, () -> this.dao, this.socialManager, this.keyboard, (dbField, id, message) -> {
+          for (String socialRegisterCmd : Settings.IMP.MAIN.SOCIAL_REGISTER_CMDS) {
+            if (SocialBotMessageListener.matchesCommand(message, socialRegisterCmd)) {
+              int desiredLength = socialRegisterCmd.strip().length();
 
-      for (String socialRegisterCmd : Settings.IMP.MAIN.SOCIAL_REGISTER_CMDS) {
-        if (lowercaseMessage.startsWith(socialRegisterCmd)) {
-          int desiredLength = socialRegisterCmd.length() + 1;
+              if (message.length() <= desiredLength) {
+                this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_REGISTER_CMD_USAGE);
+                return;
+              }
 
-          if (message.length() <= desiredLength) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_REGISTER_CMD_USAGE);
-            return;
-          }
+              String userIndex = dbField + id;
+              CachedRegisteredUser cachedRegisteredUser = this.cachedAccountRegistrations.get(userIndex);
+              if (cachedRegisteredUser == null) {
+                this.cachedAccountRegistrations.put(userIndex, cachedRegisteredUser = new CachedRegisteredUser());
+              }
 
-          String userIndex = dbField + id;
-          CachedRegisteredUser cachedRegisteredUser = this.cachedAccountRegistrations.get(userIndex);
-          if (cachedRegisteredUser == null) {
-            this.cachedAccountRegistrations.put(userIndex, cachedRegisteredUser = new CachedRegisteredUser());
-          }
+              if (cachedRegisteredUser.getRegistrationAmount() >= Settings.IMP.MAIN.MAX_REGISTRATION_COUNT_PER_TIME) {
+                this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_LIMIT);
+                return;
+              }
 
-          if (cachedRegisteredUser.getRegistrationAmount() >= Settings.IMP.MAIN.MAX_REGISTRATION_COUNT_PER_TIME) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_LIMIT);
-            return;
-          }
+              cachedRegisteredUser.incrementRegistrationAmount();
 
-          cachedRegisteredUser.incrementRegistrationAmount();
+              if (this.dao.queryForEq(dbField, id).size() != 0) {
+                this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_ALREADY);
+                return;
+              }
 
-          if (this.dao.queryForEq(dbField, id).size() != 0) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_ALREADY);
-            return;
-          }
+              String account = message.substring(desiredLength).strip();
+              if (!this.nicknamePattern.matcher(account).matches()) {
+                this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_INCORRECT_NICKNAME);
+                return;
+              }
 
-          String account = message.substring(desiredLength);
-          if (!this.nicknamePattern.matcher(account).matches()) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_INCORRECT_NICKNAME);
-            return;
-          }
+              String lowercaseNickname = account.toLowerCase(Locale.ROOT);
+              if (this.plugin.getPlayerDao().idExists(lowercaseNickname)) {
+                this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_TAKEN_NICKNAME);
+                return;
+              }
 
-          String lowercaseNickname = account.toLowerCase(Locale.ROOT);
-          if (this.plugin.getPlayerDao().idExists(lowercaseNickname)) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_TAKEN_NICKNAME);
-            return;
-          }
+              if (!Settings.IMP.MAIN.ALLOW_PREMIUM_NAMES_REGISTRATION && this.plugin.isPremium(lowercaseNickname)) {
+                this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_PREMIUM_NICKNAME);
+                return;
+              }
 
-          if (!Settings.IMP.MAIN.ALLOW_PREMIUM_NAMES_REGISTRATION && this.plugin.isPremium(lowercaseNickname)) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_PREMIUM_NICKNAME);
-            return;
-          }
+              String newPassword = Long.toHexString(Double.doubleToLongBits(Math.random()));
 
-          String newPassword = Long.toHexString(Double.doubleToLongBits(Math.random()));
+              RegisteredPlayer player = new RegisteredPlayer(account, "", "").setPassword(newPassword);
+              this.plugin.getPlayerDao().create(player);
 
-          RegisteredPlayer player = new RegisteredPlayer(account, "", "").setPassword(newPassword);
-          this.plugin.getPlayerDao().create(player);
-
-          this.linkSocial(lowercaseNickname, dbField, id);
-          this.socialManager.broadcastMessage(dbField, id,
-              Placeholders.replace(Settings.IMP.MAIN.STRINGS.REGISTER_SUCCESS, newPassword));
-        }
-      }
-
-      for (String socialLinkCmd : Settings.IMP.MAIN.SOCIAL_LINK_CMDS) {
-        if (lowercaseMessage.startsWith(socialLinkCmd)) {
-          int desiredLength = socialLinkCmd.length() + 1;
-
-          if (message.length() <= desiredLength) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_CMD_USAGE);
-            return;
-          }
-
-          String[] args = message.substring(desiredLength).split(" ");
-          if (this.dao.queryForEq(dbField, id).size() != 0) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_ALREADY);
-            return;
-          }
-
-          String account = args[0].toLowerCase(Locale.ROOT);
-          if (!this.nicknamePattern.matcher(account).matches()) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_UNKNOWN_ACCOUNT);
-            return;
-          }
-
-          if (args.length == 1) {
-            if (Settings.IMP.MAIN.DISABLE_LINK_WITHOUT_PASSWORD) {
-              this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_CMD_USAGE);
-              return;
-            }
-
-            int code = ThreadLocalRandom.current().nextInt(Settings.IMP.MAIN.CODE_LOWER_BOUND, Settings.IMP.MAIN.CODE_UPPER_BOUND);
-            this.codeMap.put(account, code);
-            this.requestedReverseMap.put(account, new TempAccount(dbField, id));
-            this.socialManager.broadcastMessage(dbField, id, Placeholders.replace(Settings.IMP.MAIN.STRINGS.LINK_CODE, String.valueOf(code)));
-          } else {
-            if (Settings.IMP.MAIN.DISABLE_LINK_WITH_PASSWORD) {
-              this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_CMD_USAGE);
-              return;
-            }
-
-            RegisteredPlayer registeredPlayer = this.plugin.getPlayerDao().queryForId(account);
-            if (AuthSessionHandler.checkPassword(args[1], registeredPlayer, this.plugin.getPlayerDao())) {
-              this.linkSocial(account, dbField, id);
-              this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SUCCESS);
-            } else {
-              this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_WRONG_PASSWORD);
+              this.linkSocial(lowercaseNickname, dbField, id);
+              this.socialManager.broadcastMessage(dbField, id,
+                  Placeholders.replace(Settings.IMP.MAIN.STRINGS.REGISTER_SUCCESS, newPassword));
               return;
             }
           }
 
-          return;
-        }
-      }
+          for (String socialLinkCmd : Settings.IMP.MAIN.SOCIAL_LINK_CMDS) {
+            if (SocialBotMessageListener.matchesCommand(message, socialLinkCmd)) {
+              int desiredLength = socialLinkCmd.strip().length();
 
-      for (String forceKeyboardCmd : Settings.IMP.MAIN.FORCE_KEYBOARD_CMDS) {
-        if (lowercaseMessage.startsWith(forceKeyboardCmd)) {
-          if (this.dao.queryBuilder().where().eq(dbField, id).countOf() == 0) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.START_REPLY);
-            return;
+              if (message.length() <= desiredLength) {
+                this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_CMD_USAGE);
+                return;
+              }
+
+              String[] args = message.substring(desiredLength).strip().split("\\s+");
+              if (this.dao.queryForEq(dbField, id).size() != 0) {
+                this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_ALREADY);
+                return;
+              }
+
+              String account = args[0].toLowerCase(Locale.ROOT);
+              if (!this.nicknamePattern.matcher(account).matches()) {
+                this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_UNKNOWN_ACCOUNT);
+                return;
+              }
+
+              if (args.length == 1) {
+                if (Settings.IMP.MAIN.DISABLE_LINK_WITHOUT_PASSWORD) {
+                  this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_CMD_USAGE);
+                  return;
+                }
+
+                int code = ThreadLocalRandom.current().nextInt(Settings.IMP.MAIN.CODE_LOWER_BOUND, Settings.IMP.MAIN.CODE_UPPER_BOUND);
+                this.codeMap.put(account, code);
+                this.requestedReverseMap.put(account, new TempAccount(dbField, id));
+                this.socialManager.broadcastMessage(dbField, id, Placeholders.replace(Settings.IMP.MAIN.STRINGS.LINK_CODE, String.valueOf(code)));
+              } else {
+                if (Settings.IMP.MAIN.DISABLE_LINK_WITH_PASSWORD) {
+                  this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_CMD_USAGE);
+                  return;
+                }
+
+                RegisteredPlayer registeredPlayer = this.plugin.getPlayerDao().queryForId(account);
+                if (AuthSessionHandler.checkPassword(args[1], registeredPlayer, this.plugin.getPlayerDao())) {
+                  this.linkSocial(account, dbField, id);
+                  this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SUCCESS);
+                } else {
+                  this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_WRONG_PASSWORD);
+                  return;
+                }
+              }
+
+              return;
+            }
           }
 
-          this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.KEYBOARD_RESTORED, this.keyboard);
-          return;
-        }
-      }
-    });
+        }));
 
     this.socialManager.addButtonEvent(INFO_BTN, (dbField, id) -> {
       List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
@@ -522,39 +508,36 @@ public class Addon {
       List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
 
       if (socialPlayerList.size() == 0) {
+        this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.START_REPLY);
         return;
       }
 
       SocialPlayer player = socialPlayerList.get(0);
 
-      if (player.isBlocked()) {
+      SocialUnlinkRepository.Result result = new SocialUnlinkRepository(this.dao)
+          .unlink(player, SocialPlayer.DatabaseField.valueOf(dbField), Settings.IMP.MAIN.UNLINK_BTN_ALL);
+
+      if (result == SocialUnlinkRepository.Result.BLOCKED) {
         this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.UNLINK_BLOCK_CONFLICT, this.keyboard);
         return;
       }
 
-      if (player.isTotpEnabled()) {
+      if (result == SocialUnlinkRepository.Result.TWO_FACTOR_ENABLED) {
         this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.UNLINK_2FA_CONFLICT, this.keyboard);
         return;
       }
 
-      Long playerId = SocialPlayer.DatabaseField.valueOf(dbField).getIdFor(player);
-      SocialPlayer.DatabaseField.valueOf(dbField).setIdFor(player, null);
-      boolean allUnlinked = Arrays.stream(SocialPlayer.DatabaseField.values())
-          .noneMatch(v -> v.getIdFor(player) != null);
-      SocialPlayer.DatabaseField.valueOf(dbField).setIdFor(player, playerId);
+      if (result == SocialUnlinkRepository.Result.STALE) {
+        this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.SOCIAL_EXCEPTION_CAUGHT, this.keyboard);
+        return;
+      }
 
-      if (Settings.IMP.MAIN.UNLINK_BTN_ALL || allUnlinked) {
+      if (result == SocialUnlinkRepository.Result.ALL_UNLINKED) {
         this.socialManager.unregisterHook(player);
-        this.dao.delete(player);
 
         Settings.IMP.MAIN.AFTER_UNLINKAGE_COMMANDS.forEach(command ->
             this.server.getCommandManager().executeAsync(p -> Tristate.TRUE, command.replace("{NICKNAME}", player.getLowercaseNickname())));
       } else {
-        UpdateBuilder<SocialPlayer, String> updateBuilder = this.dao.updateBuilder();
-        updateBuilder.where().eq(SocialPlayer.LOWERCASE_NICKNAME_FIELD, player.getLowercaseNickname());
-        updateBuilder.updateColumnValue(dbField, null);
-        updateBuilder.update();
-
         this.socialManager.unregisterHook(dbField, player);
       }
 
@@ -565,6 +548,7 @@ public class Addon {
   }
 
   public void onReload() throws SQLException {
+    this.stopLinkInvitations();
     this.load();
     this.server.getEventManager().unregisterListeners(this);
 
@@ -579,8 +563,11 @@ public class Addon {
     this.server.getEventManager().register(this, new LimboAuthListener(this, this.plugin, this.dao, this.socialManager,
         this.keyboard, this.geoIp
     ));
-    SocialLinkMenu linkMenu = new SocialLinkMenu(Settings.IMP.MAIN, SERIALIZER, this.logger);
-    this.server.getEventManager().register(this, new SocialLinkListener(this.dao, linkMenu, this.logger));
+    SocialLinkMenu linkMenu = new SocialLinkMenu(Settings.IMP.MAIN, SERIALIZER, this.logger, this.socialManager::getPublicContact);
+    this.linkListener = new SocialLinkListener(this.dao, linkMenu, this.logger, System::nanoTime);
+    this.server.getEventManager().register(this, this.linkListener);
+    this.linkInvitationTask = this.server.getScheduler().buildTask(this, this.linkListener::retryPending)
+        .repeat(2, TimeUnit.SECONDS).schedule();
     this.server.getEventManager().register(this, new ReloadListener(this));
     this.server.getEventManager().register(this, ProxyShutdownEvent.class, this::onProxyShutdown);
 
@@ -612,11 +599,21 @@ public class Addon {
   }
 
   private void onProxyShutdown(ProxyShutdownEvent event) {
+    this.stopLinkInvitations();
     if (this.socialManager != null) {
       this.socialManager.stop();
     }
     if (this.purgeCacheTask != null) {
       this.purgeCacheTask.cancel();
+    }
+  }
+
+  private void stopLinkInvitations() {
+    if (this.linkListener != null) {
+      this.linkListener.stop();
+    }
+    if (this.linkInvitationTask != null) {
+      this.linkInvitationTask.cancel();
     }
   }
 
@@ -630,9 +627,8 @@ public class Addon {
   public void unregisterPlayer(String nickname) {
     try {
       SocialPlayer player = this.dao.queryForId(nickname.toLowerCase(Locale.ROOT));
-      if (player != null) {
+      if (player != null && this.dao.delete(player) == 1) {
         this.socialManager.unregisterHook(player);
-        this.dao.delete(player);
       }
     } catch (SQLException e) {
       throw new IllegalStateException(e);

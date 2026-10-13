@@ -20,7 +20,10 @@ package net.elytrium.limboauth.socialaddon;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
+import com.vk.api.sdk.exceptions.ApiException;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -89,6 +92,27 @@ class SocialRuntimeTest {
   }
 
   @Test
+  void startup_failure_logs_api_code_once_without_credentials_or_raw_upstream_message() {
+    AtomicLong clock = new AtomicLong();
+    FakeSocial social = new FakeSocial();
+    social.failure = new ApiException(5, "access_token=private-fixture-token");
+    social.fail = true;
+    Logger logger = mock(Logger.class);
+    SocialRuntime runtime = new SocialRuntime("vk", social, logger, clock::get);
+    try {
+      runtime.tick();
+      clock.set(TimeUnit.SECONDS.toNanos(5));
+      runtime.tick();
+      verify(logger).warn("Social provider {} is unavailable reason={}; proxy startup is not blocked, authentication remains protected",
+          "vk", "initialization_vk_api_5");
+      verifyNoMoreInteractions(logger);
+      assertThat(runtime.isAvailable()).isFalse();
+    } finally {
+      runtime.stop();
+    }
+  }
+
+  @Test
   void disabled_provider_is_never_started() {
     FakeSocial social = new FakeSocial();
     social.enabled = false;
@@ -140,6 +164,7 @@ class SocialRuntimeTest {
     boolean enabled = true;
     volatile boolean healthy;
     volatile boolean fail;
+    Exception failure = new IllegalStateException("fixture token must not be logged");
 
     FakeSocial() {
       super((field, id, message) -> { }, (field, id, message) -> { });
@@ -166,7 +191,7 @@ class SocialRuntimeTest {
       this.entered.countDown();
       waitFor(this.release);
       if (this.fail) {
-        throw new SocialInitializationException(new IllegalStateException("fixture token must not be logged"));
+        throw new SocialInitializationException(this.failure);
       }
       this.healthy = true;
     }

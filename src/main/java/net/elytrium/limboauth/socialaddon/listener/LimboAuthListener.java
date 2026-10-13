@@ -19,7 +19,7 @@ package net.elytrium.limboauth.socialaddon.listener;
 
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
-import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
+import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.proxy.Player;
 import java.sql.SQLException;
 import java.util.List;
@@ -62,6 +62,7 @@ public class LimboAuthListener {
   private final List<List<AbstractSocial.ButtonItem>> yesNoButtons;
   private final List<List<AbstractSocial.ButtonItem>> keyboard;
   private final Map<String, AuthSession> sessions = new ConcurrentHashMap<>();
+  private final Map<Player, Object> joinNotifications = new ConcurrentHashMap<>();
 
   private final GeoIp geoIp;
   private final boolean auth2faWithoutPassword = Settings.IMP.MAIN.AUTH_2FA_WITHOUT_PASSWORD;
@@ -169,18 +170,35 @@ public class LimboAuthListener {
   }
 
   @Subscribe
-  public void onGameProfile(PlayerChooseInitialServerEvent event) {
-    SocialPlayer player = this.queryPlayer(event.getPlayer());
-    if (player != null && Settings.IMP.MAIN.ENABLE_NOTIFY && player.isNotifyEnabled()) {
-      String ip = event.getPlayer().getRemoteAddress().getAddress().getHostAddress();
-      this.socialManager.broadcastMessage(player, Placeholders.replace(Settings.IMP.MAIN.STRINGS.NOTIFY_JOIN,
-          ip,
-          Optional.ofNullable(this.geoIp).map(nonNullGeo -> nonNullGeo.getLocation(ip)).orElse("")), this.keyboard);
+  public void onServerConnected(ServerPostConnectEvent event) {
+    Player proxyPlayer = event.getPlayer();
+    if (event.getPreviousServer() != null || !Settings.IMP.MAIN.ENABLE_NOTIFY || !proxyPlayer.isActive()) {
+      return;
     }
+    Object notification = new Object();
+    if (this.joinNotifications.putIfAbsent(proxyPlayer, notification) != null) {
+      return;
+    }
+    // Optional notification SQL and GeoIP must not delay the awaited initial-server selection.
+    SocialPlayer player = this.queryPlayer(proxyPlayer);
+    if (player == null || !player.isNotifyEnabled() || !this.isCurrentNotification(proxyPlayer, notification)) {
+      return;
+    }
+    String ip = proxyPlayer.getRemoteAddress().getAddress().getHostAddress();
+    String message = Placeholders.replace(Settings.IMP.MAIN.STRINGS.NOTIFY_JOIN,
+        ip, Optional.ofNullable(this.geoIp).map(nonNullGeo -> nonNullGeo.getLocation(ip)).orElse(""));
+    if (this.isCurrentNotification(proxyPlayer, notification)) {
+      this.socialManager.broadcastMessage(player, message, this.keyboard);
+    }
+  }
+
+  private boolean isCurrentNotification(Player player, Object notification) {
+    return player.isActive() && this.joinNotifications.get(player) == notification;
   }
 
   @Subscribe
   public void onPlayerLeave(DisconnectEvent event) {
+    this.joinNotifications.remove(event.getPlayer());
     if (event.getPlayer().getCurrentServer().isEmpty()) {
       return;
     }

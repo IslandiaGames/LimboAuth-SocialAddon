@@ -25,7 +25,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
 import net.elytrium.commons.kyori.serialization.Serializer;
+import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
+import net.elytrium.limboauth.socialaddon.social.SocialContactLinks;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -33,20 +37,25 @@ import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.slf4j.Logger;
 
-/** Renders configured public contacts independently of provider network startup. */
+/** Resolves public links without network requests on the command or login path. */
 public final class SocialLinkMenu {
 
   private final Serializer serializer;
   private final List<Contact> contacts;
+  private final Function<String, Optional<String>> discoveredContacts;
   private final String usage;
   private final String hover;
+  private final String discordHover;
   private final Component announcement;
   private final Component notConfigured;
 
-  public SocialLinkMenu(Settings.MAIN settings, Serializer serializer, Logger logger) {
+  public SocialLinkMenu(Settings.MAIN settings, Serializer serializer, Logger logger,
+                        Function<String, Optional<String>> discoveredContacts) {
     this.serializer = serializer;
+    this.discoveredContacts = discoveredContacts;
     this.usage = settings.STRINGS.LINK_CMD_USAGE;
     this.hover = settings.STRINGS.LINK_CONTACT_HOVER;
+    this.discordHover = settings.STRINGS.LINK_DISCORD_CONTACT_HOVER;
     this.announcement = serializer.deserialize(settings.STRINGS.LINK_ANNOUNCEMENT);
     this.notConfigured = serializer.deserialize(settings.STRINGS.LINK_NOT_CONFIGURED);
     List<Contact> configured = new ArrayList<>();
@@ -55,12 +64,17 @@ public final class SocialLinkMenu {
     this.addContact(configured, Provider.VK, settings.VK.ENABLED, settings.VK.CONTACT, logger);
     this.contacts = List.copyOf(configured);
     if (this.contacts.isEmpty()) {
-      logger.warn("Social account linking has no configured public contacts; check enabled and contact settings");
+      logger.warn("Social account linking has no enabled services with configured or discoverable contacts");
     }
   }
 
   private void addContact(List<Contact> result, Provider provider, boolean enabled, String contact, Logger logger) {
     if (!enabled) {
+      return;
+    }
+    if (contact.isBlank()) {
+      result.add(new Contact(provider, ""));
+      logger.info("Social provider {} public contact will be discovered from the bot identity", provider.name());
       return;
     }
     try {
@@ -70,31 +84,57 @@ public final class SocialLinkMenu {
         logger.warn("Social provider {} has no valid public HTTPS contact; account linking is not advertised", provider.name());
         return;
       }
-      result.add(new Contact(provider, uri.toASCIIString()));
+      result.add(new Contact(provider, this.messageContact(provider, uri.toASCIIString())));
     } catch (URISyntaxException error) {
       logger.warn("Social provider {} has an invalid public contact; account linking is not advertised", provider.name());
     }
   }
 
   public Optional<Component> announcement(Player player) {
-    if (this.contacts.isEmpty() || this.announcement.equals(Component.empty())) {
+    return this.announcement(player, Set.of());
+  }
+
+  public Optional<Component> announcement(Player player, Set<SocialPlayer.DatabaseField> linkedServices) {
+    List<Contact> resolved = this.resolveContacts();
+    if (resolved.isEmpty() || this.announcement.equals(Component.empty())) {
       return Optional.empty();
     }
     return Optional.of(this.announcement.append(Component.newline()).append(Component.newline())
-        .append(this.buttons(player, this.contacts)));
+        .append(this.buttons(player, resolved, linkedServices)));
+  }
+
+  public boolean isAnnouncementAvailable() {
+    return !this.announcement.equals(Component.empty()) && !this.resolveContacts().isEmpty();
   }
 
   public Component usage(Player player, String alias) {
-    List<Contact> selected = this.contacts.stream()
+    List<Contact> selected = this.resolveContacts().stream()
         .filter(contact -> Provider.fromAlias(alias).map(provider -> provider == contact.provider()).orElse(true)).toList();
     if (selected.isEmpty()) {
       return this.notConfigured;
     }
     return this.serializer.deserialize(this.usage.replace("{NICKNAME}", player.getUsername()))
-        .append(Component.newline()).append(this.buttons(player, selected));
+        .append(Component.newline()).append(this.buttons(player, selected, Set.of()));
   }
 
-  private Component buttons(Player player, List<Contact> selected) {
+  private List<Contact> resolveContacts() {
+    List<Contact> resolved = new ArrayList<>();
+    for (Contact contact : this.contacts) {
+      if (!contact.url().isEmpty()) {
+        resolved.add(contact);
+      } else {
+        this.discoveredContacts.apply(contact.provider().dbField.name())
+            .ifPresent(url -> resolved.add(new Contact(contact.provider(), this.messageContact(contact.provider(), url))));
+      }
+    }
+    return resolved;
+  }
+
+  private String messageContact(Provider provider, String url) {
+    return provider == Provider.VK ? SocialContactLinks.vkMessages(url) : url;
+  }
+
+  private Component buttons(Player player, List<Contact> selected, Set<SocialPlayer.DatabaseField> linkedServices) {
     Component result = Component.empty();
     boolean modern = player.getProtocolVersion().compareTo(ProtocolVersion.MINECRAFT_1_16) >= 0;
     for (Contact contact : selected) {
@@ -102,10 +142,16 @@ public final class SocialLinkMenu {
         result = result.append(Component.space());
       }
       Provider provider = contact.provider();
-      Component button = Component.text("[" + provider.label + "]", modern ? provider.color : provider.legacyColor)
+      Component label = Component.text(provider.label, modern ? provider.color : provider.legacyColor);
+      if (linkedServices.contains(provider.dbField)) {
+        label = label.append(Component.text(" ✓", NamedTextColor.GREEN));
+      }
+      Component button = Component.text("[", NamedTextColor.WHITE)
+          .append(label).append(Component.text("]", NamedTextColor.WHITE))
           .decorate(TextDecoration.BOLD)
           .clickEvent(ClickEvent.openUrl(contact.url()))
-          .hoverEvent(this.serializer.deserialize(this.hover.replace("{NICKNAME}", player.getUsername())));
+          .hoverEvent(this.serializer.deserialize((provider == Provider.DISCORD ? this.discordHover : this.hover)
+              .replace("{NICKNAME}", player.getUsername())));
       result = result.append(button);
     }
     return result;
@@ -115,18 +161,20 @@ public final class SocialLinkMenu {
   }
 
   private enum Provider {
-    TELEGRAM("Telegram", "addtg", TextColor.color(0x2AABEE), NamedTextColor.AQUA),
-    DISCORD("Discord", "addds", TextColor.color(0x5865F2), NamedTextColor.LIGHT_PURPLE),
-    VK("VK", "addvk", TextColor.color(0x0077FF), NamedTextColor.BLUE);
+    TELEGRAM("Telegram", "addtg", SocialPlayer.DatabaseField.TELEGRAM_ID, TextColor.color(0x2AABEE), NamedTextColor.AQUA),
+    DISCORD("Discord", "addds", SocialPlayer.DatabaseField.DISCORD_ID, TextColor.color(0x5865F2), NamedTextColor.LIGHT_PURPLE),
+    VK("VK", "addvk", SocialPlayer.DatabaseField.VK_ID, TextColor.color(0x0077FF), NamedTextColor.BLUE);
 
     private final String label;
     private final String alias;
+    private final SocialPlayer.DatabaseField dbField;
     private final TextColor color;
     private final NamedTextColor legacyColor;
 
-    Provider(String label, String alias, TextColor color, NamedTextColor legacyColor) {
+    Provider(String label, String alias, SocialPlayer.DatabaseField dbField, TextColor color, NamedTextColor legacyColor) {
       this.label = label;
       this.alias = alias;
+      this.dbField = dbField;
       this.color = color;
       this.legacyColor = legacyColor;
     }

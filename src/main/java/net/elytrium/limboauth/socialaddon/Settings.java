@@ -48,7 +48,7 @@ public class Settings extends YamlConfig {
 
     public List<String> SOCIAL_REGISTER_CMDS = List.of("!account register");
     public List<String> SOCIAL_LINK_CMDS = List.of("!account link");
-    public List<String> FORCE_KEYBOARD_CMDS = List.of("!keyboard");
+    public List<String> FORCE_KEYBOARD_CMDS = List.of("!keyboard", "/menu", "menu", "меню");
 
     public int CODE_LOWER_BOUND = 1000000;
     public int CODE_UPPER_BOUND = 10000000;
@@ -117,7 +117,7 @@ public class Settings extends YamlConfig {
 
     public static class VK {
       public boolean ENABLED = false;
-      @Comment("Public HTTPS link to the bot or community messages; never include a token")
+      @Comment("Public HTTPS link to the bot or community messages; blank discovers it from the bot; never include a token")
       public String CONTACT = "";
       public String TOKEN = "1234567890";
     }
@@ -127,7 +127,7 @@ public class Settings extends YamlConfig {
 
     public static class DISCORD {
       public boolean ENABLED = false;
-      @Comment("Public HTTPS link to the bot; never include a token")
+      @Comment("Public HTTPS link to the bot; blank discovers it from the bot; never include a token")
       public String CONTACT = "";
       public String TOKEN = "1234567890";
 
@@ -174,7 +174,7 @@ public class Settings extends YamlConfig {
     public static class TELEGRAM {
       @Comment("HTTPS API origin only; may point to the private Cloudflare Telegram relay")
       public String API_URL = "https://api.telegram.org";
-      @Comment("Public HTTPS link to the bot; never include a token")
+      @Comment("Public HTTPS link to the bot; blank discovers it from the bot; never include a token")
       public String CONTACT = "";
       public boolean ENABLED = false;
       public String TOKEN = "1234567890";
@@ -223,14 +223,17 @@ public class Settings extends YamlConfig {
 
       @Placeholders({"{NICKNAME}"})
       public String LINK_CMD_USAGE = "{PRFX} Open a bot below and send '!account link {NICKNAME}'. Then confirm the code in game.";
-      public String LINK_NOT_CONFIGURED = "{PRFX} Account linking to this messenger is not configured.";
+      public String LINK_NOT_CONFIGURED = "{PRFX} Account linking to this service is not configured.";
       @Placeholders({"{NICKNAME}"})
       public String LINK_CONTACT_HOVER = "Open the bot and send '!account link {NICKNAME}'";
+      @Placeholders({"{NICKNAME}"})
+      public String LINK_DISCORD_CONTACT_HOVER = "Open the bot profile, choose Message, then send '!account link {NICKNAME}'";
       @Placeholders({"{NICKNAME}"})
       public String LINK_WRONG_CODE = "{PRFX} Wrong code, run '!account link {NICKNAME}' again";
       public String LINK_SUCCESS_GAME = "{PRFX} Social was successfully linked";
       public String LINK_SUCCESS = "✅ Social was successfully linked{NL}Use '!keyboard' to show keyboard";
       public String LINK_ALREADY = "Account is already linked";
+      public String BOT_HELP = "This bot helps protect and manage your game account. Use the commands or buttons below.";
       public String LINK_SOCIAL_REGISTER_CMD_USAGE = "You didn't specify a nickname. Enter '!account register <nickname>'";
       public String LINK_SOCIAL_CMD_USAGE = "You didn't specify a nickname. Enter '!account link <nickname>'";
       public String LINK_UNKNOWN_ACCOUNT = "There is no account with this nickname";
@@ -312,7 +315,7 @@ public class Settings extends YamlConfig {
       public String KEYBOARD_RESTORED = "Keyboard was restored";
 
       @Comment("Header above the clickable bot links after the first backend connection; empty disables the invitation")
-      public String LINK_ANNOUNCEMENT = "{PRFX} Link your account to a messenger:";
+      public String LINK_ANNOUNCEMENT = "{PRFX} &aTo avoid losing access to your account, link it to a service.";
 
       public String SOCIAL_EXCEPTION_CAUGHT = "An exception occurred while processing your request";
     }

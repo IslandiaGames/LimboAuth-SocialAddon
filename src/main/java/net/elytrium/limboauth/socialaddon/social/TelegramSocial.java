@@ -65,7 +65,10 @@ public class TelegramSocial extends AbstractSocial {
   public void start() throws SocialInitializationException {
     try {
       this.client = new TelegramClient(this.origin, this.token);
-      this.client.execute(new GetMe());
+      String username = this.client.execute(new GetMe()).getUserName();
+      if (username != null && username.matches("[A-Za-z0-9_]{5,32}")) {
+        this.setPublicContact("https://t.me/" + username);
+      }
       String webhook = this.client.execute(new GetWebhookInfo()).getUrl();
       if (webhook != null && !webhook.isEmpty()) {
         throw new TelegramApiException("Telegram webhook must be removed before enabling polling");
@@ -91,14 +94,16 @@ public class TelegramSocial extends AbstractSocial {
       request.setTimeout(25);
       request.setLimit(100);
       request.setAllowedUpdates(List.of("message", "callback_query"));
-      List<Update> updates = this.client.execute(request);
+      final List<Update> updates = this.client.execute(request);
       this.lastPoll = System.nanoTime();
+      this.clearFailure();
       this.failures = 0;
       for (Update update : updates) {
         this.offset = update.getUpdateId() + 1;
         this.onUpdate(update);
       }
     } catch (TelegramApiException | RuntimeException error) {
+      this.recordFailure(error);
       this.lastPoll = 0;
       this.failures = Math.min(6, this.failures + 1);
       this.retryAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.min(60, 1L << this.failures));

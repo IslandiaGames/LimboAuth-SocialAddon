@@ -90,6 +90,7 @@ public class VKSocial extends AbstractSocial {
       GroupActor tempActor = new GroupActor(0, this.token);
       int groupId = this.vk.groups().getByIdObjectLegacy(tempActor).groupIds(Collections.emptyList()).execute().get(0).getId();
       this.actor = new GroupActor(groupId, this.token);
+      this.setPublicContact("https://vk.me/club" + groupId);
       this.vk.groups().setLongPollSettings(this.actor, groupId).enabled(true)
           .messageEvent(true).messageNew(true).execute();
     } catch (ApiException | ClientException error) {
@@ -112,12 +113,15 @@ public class VKSocial extends AbstractSocial {
           GetLongPollEventsResponse response = longPoll.getEvents(serverInfo.getServer(), serverInfo.getKey(), ts).waitTime(25).execute();
           ts = response.getTs();
           this.lastPoll = System.nanoTime();
+          this.clearFailure();
           delay = 5;
           response.getUpdates().forEach(this::onUpdate);
         }
       } catch (LongPollServerKeyExpiredException expired) {
+        this.recordFailure(expired);
         this.lastPoll = 0;
       } catch (ClientException | ApiException | RuntimeException error) {
+        this.recordFailure(error);
         this.lastPoll = 0;
         try {
           TimeUnit.SECONDS.sleep(delay);
