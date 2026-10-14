@@ -36,12 +36,12 @@ import com.velocitypowered.api.proxy.server.RegisteredServer;
 import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.elytrium.commons.config.Placeholders;
@@ -58,27 +58,34 @@ import org.mockito.MockedStatic;
 
 class LimboAuthJoinNotificationTest {
 
+  private final List<Fixture> fixtures = new ArrayList<>();
+
   @AfterEach
-  void remove_placeholders() {
+  void remove_placeholders() throws Exception {
+    for (Fixture fixture : this.fixtures) {
+      fixture.listener.stop();
+      assertThat(fixture.notifications.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    }
     Placeholders.removePlaceholders(Settings.IMP.MAIN.STRINGS.NOTIFY_JOIN);
   }
 
   @Test
   void notification_waits_for_first_connection_and_never_queries_during_initial_server_selection() throws Exception {
-    Fixture fixture = new Fixture();
+    final Fixture fixture = this.fixture();
     fixture.dispatch(new PlayerChooseInitialServerEvent(fixture.player, null));
     verifyNoInteractions(fixture.dao);
     verifyNoInteractions(fixture.manager);
     fixture.dispatch(new ServerPostConnectEvent(fixture.player, null));
     fixture.dispatch(new ServerPostConnectEvent(fixture.player, null));
     fixture.dispatch(new ServerPostConnectEvent(fixture.player, mock(RegisteredServer.class)));
+    fixture.drainNotifications();
     verify(fixture.dao, times(1)).queryForId("fixture");
     verify(fixture.manager, times(1)).broadcastMessage(fixture.social, "Joined 127.0.0.1", List.of());
   }
 
   @Test
   void disabled_notifications_and_inactive_connections_never_query_the_database() throws Exception {
-    Fixture fixture = new Fixture();
+    final Fixture fixture = this.fixture();
     Settings.IMP.MAIN.ENABLE_NOTIFY = false;
     fixture.dispatch(new ServerPostConnectEvent(fixture.player, null));
     Settings.IMP.MAIN.ENABLE_NOTIFY = true;
@@ -90,37 +97,92 @@ class LimboAuthJoinNotificationTest {
 
   @Test
   void disconnect_during_database_read_prevents_a_late_join_notification() throws Exception {
-    Fixture fixture = new Fixture();
-    CountDownLatch entered = new CountDownLatch(1);
-    CountDownLatch release = new CountDownLatch(1);
+    final Fixture fixture = this.fixture();
+    final CountDownLatch entered = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
     when(fixture.dao.queryForId("fixture")).thenAnswer(invocation -> {
       entered.countDown();
       assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
       return fixture.social;
     });
-    ExecutorService executor = Executors.newSingleThreadExecutor();
     try {
-      final Future<?> notification = executor.submit(() -> fixture.listener.onServerConnected(new ServerPostConnectEvent(fixture.player, null)));
+      fixture.listener.onServerConnected(new ServerPostConnectEvent(fixture.player, null));
       assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
-      DisconnectEvent disconnected = mock(DisconnectEvent.class);
+      final DisconnectEvent disconnected = mock(DisconnectEvent.class);
       when(disconnected.getPlayer()).thenReturn(fixture.player);
       fixture.listener.onPlayerLeave(disconnected);
       release.countDown();
-      notification.get(5, TimeUnit.SECONDS);
+      fixture.drainNotifications();
       verifyNoInteractions(fixture.manager);
     } finally {
       release.countDown();
-      executor.shutdownNow();
-      assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
     }
+  }
+
+  @Test
+  void blocked_optional_read_does_not_block_backend_connection_event() throws Exception {
+    final Fixture fixture = this.fixture();
+    final CountDownLatch entered = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+    when(fixture.dao.queryForId("fixture")).thenAnswer(invocation -> {
+      entered.countDown();
+      assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
+      return fixture.social;
+    });
+    try {
+      fixture.dispatch(new ServerPostConnectEvent(fixture.player, null));
+      assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+      // The event has already returned although the optional database call is still pending.
+      fixture.dispatch(new PlayerChooseInitialServerEvent(fixture.player, null));
+      verifyNoInteractions(fixture.manager);
+      release.countDown();
+      fixture.drainNotifications();
+      verify(fixture.manager).broadcastMessage(fixture.social, "Joined 127.0.0.1", List.of());
+    } finally {
+      release.countDown();
+    }
+  }
+
+  @Test
+  void reload_stop_discards_a_late_database_result() throws Exception {
+    final Fixture fixture = this.fixture();
+    final CountDownLatch entered = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+    when(fixture.dao.queryForId("fixture")).thenAnswer(invocation -> {
+      entered.countDown();
+      // A database driver may finish even after interruption.
+      try {
+        release.await(5, TimeUnit.SECONDS);
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+      }
+      return fixture.social;
+    });
+    try {
+      fixture.listener.onServerConnected(new ServerPostConnectEvent(fixture.player, null));
+      assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+      fixture.listener.stop();
+      release.countDown();
+      assertThat(fixture.notifications.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+      verifyNoInteractions(fixture.manager);
+    } finally {
+      release.countDown();
+    }
+  }
+
+  private Fixture fixture() throws Exception {
+    final Fixture fixture = new Fixture();
+    this.fixtures.add(fixture);
+    return fixture;
   }
 
   private static final class Fixture {
 
+    private final ExecutorService notifications = Executors.newSingleThreadExecutor();
     private final AtomicBoolean active = new AtomicBoolean(true);
     private final Player player = mock(Player.class);
     private final SocialManager manager = mock(SocialManager.class);
-    private final SocialPlayer social = new SocialPlayer("fixture");
+    private final SocialPlayer social;
     private final Dao<SocialPlayer, String> dao;
     private final LimboAuthListener listener;
 
@@ -132,6 +194,7 @@ class LimboAuthJoinNotificationTest {
       Settings.IMP.MAIN.STRINGS.NOTIFY_JOIN = "Joined {IP}";
       Placeholders.addPlaceholders(Settings.IMP.MAIN.STRINGS.NOTIFY_JOIN, "{IP}", "{LOCATION}");
       this.dao = mock(Dao.class);
+      this.social = new SocialPlayer("fixture");
       this.social.setNotifyEnabled(true);
       this.social.setTelegramID(123L);
       when(this.dao.queryForId("fixture")).thenReturn(this.social);
@@ -139,16 +202,20 @@ class LimboAuthJoinNotificationTest {
       when(this.player.isActive()).thenAnswer(invocation -> this.active.get());
       when(this.player.getCurrentServer()).thenReturn(Optional.empty());
       when(this.player.getRemoteAddress()).thenReturn(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 25565));
-      Serializer serializer = mock(Serializer.class);
+      final Serializer serializer = mock(Serializer.class);
       when(serializer.deserialize(any(String.class))).thenReturn(Component.empty());
-      try (MockedStatic<Addon> addon = mockStatic(Addon.class)) {
+      try (final MockedStatic<Addon> addon = mockStatic(Addon.class)) {
         addon.when(Addon::getSerializer).thenReturn(serializer);
-        this.listener = new LimboAuthListener(null, null, this.dao, this.manager, List.of(), null);
+        this.listener = new LimboAuthListener(null, null, this.dao, this.manager, List.of(), null, this.notifications);
       }
       clearInvocations(this.manager);
     }
 
-    private void dispatch(Object event) throws Exception {
+    private void drainNotifications() throws Exception {
+      this.notifications.submit(() -> { }).get(5, TimeUnit.SECONDS);
+    }
+
+    private void dispatch(final Object event) throws Exception {
       for (Method method : LimboAuthListener.class.getDeclaredMethods()) {
         if (method.isAnnotationPresent(Subscribe.class) && method.getParameterCount() == 1
             && method.getParameterTypes()[0].isInstance(event)) {

@@ -28,9 +28,15 @@ import com.vk.api.sdk.client.VkApiClient;
 import com.vk.api.sdk.client.actors.GroupActor;
 import com.vk.api.sdk.exceptions.ApiException;
 import com.vk.api.sdk.exceptions.ClientException;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
@@ -38,10 +44,10 @@ class VkTransportTest {
 
   @Test
   void actual_sdk_reads_identity_and_api_errors_through_http_transport() throws Exception {
-    AtomicReference<String> body = new AtomicReference<>("{\"response\":[{\"id\":123,\"name\":\"Fixture\",\"screen_name\":\"fixture\"}]}");
-    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    final AtomicReference<String> body = new AtomicReference<>("{\"response\":[{\"id\":123,\"name\":\"Fixture\",\"screen_name\":\"fixture\"}]}");
+    final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext("/method/groups.getById", exchange -> {
-      byte[] bytes = body.get().getBytes(StandardCharsets.UTF_8);
+      final byte[] bytes = body.get().getBytes(StandardCharsets.UTF_8);
       exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
       exchange.sendResponseHeaders(200, bytes.length);
       try (var output = exchange.getResponseBody()) {
@@ -49,10 +55,10 @@ class VkTransportTest {
       }
     });
     server.start();
-    try (VkTransport transport = new VkTransport()) {
-      VkApiClient client = spy(new VkApiClient(transport, new GsonBuilder().create(), 1));
+    try (final VkTransport transport = new VkTransport()) {
+      final VkApiClient client = spy(new VkApiClient(transport, new GsonBuilder().create(), 1));
       when(client.getApiEndpoint()).thenReturn("http://127.0.0.1:" + server.getAddress().getPort() + "/method/");
-      GroupActor actor = new GroupActor(0, "fixture-token");
+      final GroupActor actor = new GroupActor(0, "fixture-token");
       assertThat(client.groups().getByIdObjectLegacy(actor).groupIds(Collections.emptyList()).execute())
           .singleElement().satisfies(group -> assertThat(group.getId()).isEqualTo(123));
       body.set("{\"error\":{\"error_code\":15,\"error_msg\":\"Access denied\",\"request_params\":[]}}");
@@ -65,9 +71,9 @@ class VkTransportTest {
 
   @Test
   void actual_sdk_rejects_invalid_http_metadata_instead_of_accepting_a_success_payload() throws Exception {
-    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext("/method/groups.getById", exchange -> {
-      byte[] bytes = "{\"response\":[{\"id\":123}]}".getBytes(StandardCharsets.UTF_8);
+      final byte[] bytes = "{\"response\":[{\"id\":123}]}".getBytes(StandardCharsets.UTF_8);
       exchange.getResponseHeaders().set("Content-Type", "application/json");
       exchange.sendResponseHeaders(503, bytes.length);
       try (var output = exchange.getResponseBody()) {
@@ -75,8 +81,8 @@ class VkTransportTest {
       }
     });
     server.start();
-    try (VkTransport transport = new VkTransport()) {
-      VkApiClient client = spy(new VkApiClient(transport, new GsonBuilder().create(), 1));
+    try (final VkTransport transport = new VkTransport()) {
+      final VkApiClient client = spy(new VkApiClient(transport, new GsonBuilder().create(), 1));
       when(client.getApiEndpoint()).thenReturn("http://127.0.0.1:" + server.getAddress().getPort() + "/method/");
       assertThatThrownBy(() -> client.groups().getByIdObjectLegacy(new GroupActor(0, "fixture-token"))
           .groupIds(Collections.emptyList()).execute()).isInstanceOf(ClientException.class).hasMessageContaining("503");
@@ -84,4 +90,36 @@ class VkTransportTest {
       server.stop(0);
     }
   }
+
+  @Test
+  void closing_transport_cancels_a_stalled_vk_request() throws Exception {
+    final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    final CountDownLatch entered = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+    server.createContext("/poll", exchange -> {
+      entered.countDown();
+      try {
+        release.await(5, TimeUnit.SECONDS);
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+      } finally {
+        exchange.close();
+      }
+    });
+    server.start();
+    final ExecutorService executor = Executors.newSingleThreadExecutor();
+    try (final VkTransport transport = new VkTransport()) {
+      final Future<?> request = executor.submit(() -> assertThatThrownBy(() -> transport.get(
+          "http://127.0.0.1:" + server.getAddress().getPort() + "/poll")).isInstanceOf(IOException.class));
+      assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+      transport.close();
+      request.get(5, TimeUnit.SECONDS);
+    } finally {
+      release.countDown();
+      server.stop(0);
+      executor.shutdownNow();
+      assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    }
+  }
+
 }

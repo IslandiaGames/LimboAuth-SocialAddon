@@ -30,6 +30,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 import net.elytrium.limboauth.socialaddon.social.AbstractSocial;
 import net.elytrium.limboauth.socialaddon.social.SocialInitializationException;
@@ -43,7 +44,7 @@ class SocialRuntimeTest {
     FakeSocial blocked = new FakeSocial();
     blocked.release = new CountDownLatch(1);
     FakeSocial healthy = new FakeSocial();
-    SocialRuntime first = new SocialRuntime("telegram", blocked, mock(Logger.class));
+    SocialRuntime first = new SocialRuntime("vk", blocked, mock(Logger.class));
     SocialRuntime second = new SocialRuntime("discord", healthy, mock(Logger.class));
     try {
       first.start();
@@ -60,6 +61,31 @@ class SocialRuntimeTest {
       blocked.release.countDown();
       first.stop();
       second.stop();
+    }
+  }
+
+  @Test
+  void stalled_vk_delivery_does_not_run_on_the_submitting_thread() throws Exception {
+    final FakeSocial social = new FakeSocial();
+    final SocialRuntime runtime = new SocialRuntime("vk", social, mock(Logger.class));
+    final CountDownLatch entered = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+    final AtomicReference<Thread> worker = new AtomicReference<>();
+    try {
+      runtime.tick();
+      runtime.execute(ignored -> {
+        worker.set(Thread.currentThread());
+        entered.countDown();
+        FakeSocial.waitFor(release);
+      });
+      // Submission returned while delivery is still waiting on the provider.
+      assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
+      assertThat(release.getCount()).isEqualTo(1);
+      assertThat(worker.get()).isNotSameAs(Thread.currentThread());
+      assertThat(runtime.isAvailable()).isTrue();
+    } finally {
+      release.countDown();
+      runtime.stop();
     }
   }
 

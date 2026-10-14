@@ -9,7 +9,7 @@ plugins {
 }
 
 setGroup("net.elytrium")
-setVersion("1.0.11-islandia.5")
+setVersion("1.0.11-islandia.6")
 
 compileJava {
     getOptions().setEncoding("UTF-8")
@@ -83,6 +83,8 @@ dependencies {
     testImplementation("net.elytrium.commons:config:$elytriumCommonsVersion")
     testImplementation("net.elytrium.commons:kyori:$elytriumCommonsVersion")
     testImplementation("com.velocitypowered:velocity-api:$velocityVersion")
+    // LimboAuth's runtime signatures include types relocated into the LimboAPI distribution.
+    testRuntimeOnly("net.elytrium.limboapi:runtime-analysis:$limboapiVersion") { transitive = false }
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testRuntimeOnly("org.postgresql:postgresql:42.7.7")
 }

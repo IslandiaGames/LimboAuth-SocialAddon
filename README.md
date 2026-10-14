@@ -1,7 +1,7 @@
 # Islandia SocialAddon
 
 Fork of Elytrium LimboAuth SocialAddon, based on commit
-`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.5`.
+`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.6`.
 
 ## Build and verification
 
@@ -50,10 +50,22 @@ polling failures. Bot request errors include safe operation, SQLState and vendor
 code independently of debug; raw responses and exception messages are never logged there.
 Deploy the service-worded configuration together with the plugin sources.
 
-Join notifications read links and prepare messages after the first backend
-connection. Choosing the initial server never waits for this optional work;
-disabled notifications skip the read. Authentication checks for blocked accounts
-and enabled 2FA remain on the authentication path.
+Join and leave notifications read links and prepare messages on a dedicated
+worker after backend connection/disconnection. Proxy events only submit work;
+the queue holds at most 64 tasks and discards queued work older than 30 seconds.
+Disabled notifications skip the read. Disconnect/reload invalidate pending join
+notifications before any optional SQL. Reload/shutdown stop the worker and discard
+late results. A blocked optional database call can still occupy that one worker
+until the database driver returns; it cannot occupy the event caller.
+
+Authentication checks for blocked accounts and enabled 2FA remain on the
+authentication path. Blocked accounts cannot enter the passwordless confirmation
+branch. Pending confirmations are consumed once and removed even when a player
+leaves from Limbo without a backend connection. Reload/shutdown cancel remaining
+confirmations; they never complete them as authenticated. Registration, response
+consumption and stop share one ownership lock, so a late availability result
+cannot publish a new waiting confirmation after shutdown. Duplicate pending
+requests are rejected instead of replacing an existing waiting event.
 
 ## Provider lifecycle
 
@@ -94,6 +106,49 @@ The PostgreSQL unlink integration test uses a dedicated database configured by
 Real account linking, confirmation/rejection, password recovery and reconnection
 must additionally be checked on a staging proxy with real bot credentials. Local
 tests do not send requests to the providers or confirm real message delivery.
+
+## Login latency verification
+
+The provided log does not prove that VK caused a 15-second login. The VK polling
+interruption occurred during shutdown at 22:21:02 UTC, before the observed join.
+LimboFilter took 6.57 seconds (128 falling-check ticks already require 6.4 seconds).
+The 38.97-second LimboAuth interval also contains human password/confirmation input;
+the successful input timestamp is absent. Auth exit to lobby connection took
+1.04 seconds. Neither the anti-bot delay nor mandatory authentication is shortened.
+
+Trace these boundaries on staging with one connection identifier and monotonic
+elapsed times, without recording passwords, bot tokens or confirmation contents:
+
+| Boundary | Ownership and evidence needed |
+| --- | --- |
+| LimboFilter enter / exit | Anti-bot time; preserve the 128-tick check. |
+| Password submitted / verified | LimboAuth password hashing and account DB read; exclude time spent typing. |
+| Pre/post authorization social DAO | SocialAddon blocked-account and 2FA configuration reads remain required. |
+| Confirmation requested / accepted / rejected | Enabled social 2FA must wait or cancel if unavailable; never proceed on a provider error. |
+| Auth exit / initial server selection / backend connected | Separate proxy handoff from backend acceptance. |
+| Optional join notification / link invitation | Background work after the first backend connection; never part of password verification. |
+
+Focused local regressions cover blocked optional DAO reads, disconnect/reload with
+late DAO replies, ordinary post-auth without 2FA, unavailable linked VK with 2FA,
+blocked passwordless accounts, single-use confirmation, VK worker isolation and
+cancellation of a stalled local HTTP request through the actual VK transport.
+They do not verify LimboAuth password hashing, real PostgreSQL performance or a
+live Velocity/backend connection. A live scenario must repeat password login,
+registration and cached login with VK healthy, unavailable and stalled; then repeat
+with mandatory 2FA and verify explicit approval/rejection and disconnected sessions.
+The existing mock tests do not establish an end-to-end login latency improvement.
+
+## Deployment
+
+Build the fork with the pinned wrapper using JDK 21:
+`bash gradlew test check shadowJar`. Copy
+`build/libs/LimboAuth-SocialAddon-1.0.11-islandia.6.jar` into the disposable Velocity
+template's `plugins` directory, together with the matching SocialAddon config.
+The selector checks the actual plugin ID/version before removing previous copies.
+Changing source/version files alone does not update the deployed plugin. No
+SocialAddon JAR is bundled in the supplied source archive; a successful build and
+artifact copy are required before deployment. Optional provider warnings remain
+warnings; artifact identity checks and mandatory 2FA remain enforced.
 
 ## License
 

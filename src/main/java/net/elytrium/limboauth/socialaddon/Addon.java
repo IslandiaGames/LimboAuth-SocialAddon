@@ -115,6 +115,7 @@ public class Addon {
   private ScheduledTask purgeCacheTask;
   private ScheduledTask linkInvitationTask;
   private SocialLinkListener linkListener;
+  private LimboAuthListener authListener;
 
   static {
     Objects.requireNonNull(org.apache.commons.logging.impl.LogFactoryImpl.class);
@@ -549,6 +550,9 @@ public class Addon {
 
   public void onReload() throws SQLException {
     this.stopLinkInvitations();
+    if (this.authListener != null) {
+      this.authListener.stop();
+    }
     this.load();
     this.server.getEventManager().unregisterListeners(this);
 
@@ -560,9 +564,10 @@ public class Addon {
 
     this.nicknamePattern = Pattern.compile(net.elytrium.limboauth.Settings.IMP.MAIN.ALLOWED_NICKNAME_REGEX);
 
-    this.server.getEventManager().register(this, new LimboAuthListener(this, this.plugin, this.dao, this.socialManager,
+    this.authListener = new LimboAuthListener(this, this.plugin, this.dao, this.socialManager,
         this.keyboard, this.geoIp
-    ));
+    );
+    this.server.getEventManager().register(this, this.authListener);
     SocialLinkMenu linkMenu = new SocialLinkMenu(Settings.IMP.MAIN, SERIALIZER, this.logger, this.socialManager::getPublicContact);
     this.linkListener = new SocialLinkListener(this.dao, linkMenu, this.logger, System::nanoTime);
     this.server.getEventManager().register(this, this.linkListener);
@@ -600,6 +605,9 @@ public class Addon {
 
   private void onProxyShutdown(ProxyShutdownEvent event) {
     this.stopLinkInvitations();
+    if (this.authListener != null) {
+      this.authListener.stop();
+    }
     if (this.socialManager != null) {
       this.socialManager.stop();
     }
