@@ -43,6 +43,39 @@ import org.junit.jupiter.api.Test;
 class VkTransportTest {
 
   @Test
+  void long_poll_preserves_timestamps_and_reports_renewal_without_sdk_error_logging() throws Exception {
+    final var body = new AtomicReference<>("{\"ts\":\"12\",\"updates\":[{\"type\":\"message_new\"}]}");
+    final var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/poll", exchange -> {
+      final var bytes = body.get().getBytes(StandardCharsets.UTF_8);
+      exchange.sendResponseHeaders(200, bytes.length);
+      try (final var output = exchange.getResponseBody()) {
+        output.write(bytes);
+      }
+    });
+    server.start();
+    try (final var transport = new VkTransport()) {
+      final var url = "http://127.0.0.1:" + server.getAddress().getPort() + "/poll";
+      final var response = transport.poll(url, "fixture-key", "11", 25);
+      assertThat(response.timestamp()).isEqualTo("12");
+      assertThat(response.updates()).hasSize(1);
+      body.set("{\"failed\":1,\"ts\":\"13\"}");
+      assertThat(transport.poll(url, "fixture-key", "12", 25).timestamp()).isEqualTo("13");
+      for (final int code : new int[]{2, 3}) {
+        body.set("{\"failed\":" + code + "}");
+        final var expired = transport.poll(url, "fixture-key", "13", 25);
+        assertThat(expired.failure()).isEqualTo(code);
+        assertThat(expired.timestamp()).isEqualTo("13");
+        assertThat(expired.updates()).isEmpty();
+      }
+      body.set("{\"failed\":4}");
+      assertThatThrownBy(() -> transport.poll(url, "fixture-key", "13", 25)).isInstanceOf(IOException.class);
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  @Test
   void actual_sdk_reads_identity_and_api_errors_through_http_transport() throws Exception {
     final AtomicReference<String> body = new AtomicReference<>("{\"response\":[{\"id\":123,\"name\":\"Fixture\",\"screen_name\":\"fixture\"}]}");
     final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -109,8 +142,8 @@ class VkTransportTest {
     server.start();
     final ExecutorService executor = Executors.newSingleThreadExecutor();
     try (final VkTransport transport = new VkTransport()) {
-      final Future<?> request = executor.submit(() -> assertThatThrownBy(() -> transport.get(
-          "http://127.0.0.1:" + server.getAddress().getPort() + "/poll")).isInstanceOf(IOException.class));
+      final Future<?> request = executor.submit(() -> assertThatThrownBy(() -> transport.poll(
+          "http://127.0.0.1:" + server.getAddress().getPort() + "/poll", "fixture-key", "1", 25)).isInstanceOf(IOException.class));
       assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
       transport.close();
       request.get(5, TimeUnit.SECONDS);

@@ -55,6 +55,8 @@ import net.elytrium.limboauth.thirdparty.com.j256.ormlite.dao.Dao;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextColor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
@@ -193,6 +195,9 @@ class SocialLinkTest {
             "[Discord" + ((links & 2) == 0 ? "" : " ✓") + "]",
             "[VK" + ((links & 4) == 0 ? "" : " ✓") + "]");
         assertThat(urls(message.getValue())).hasSize(3);
+        assertThat(color(message.getValue(), "Telegram")).contains(NamedTextColor.AQUA);
+        assertThat(color(message.getValue(), "Discord")).contains(NamedTextColor.BLUE);
+        assertThat(color(message.getValue(), "VK")).contains(NamedTextColor.DARK_BLUE);
       }
     }
     Player disconnected = player();
@@ -429,5 +434,18 @@ class SocialLinkTest {
       result.append(text(child));
     }
     return result.toString();
+  }
+
+  private static Optional<TextColor> color(Component component, String label) {
+    if (component instanceof TextComponent text && text.content().equals(label)) {
+      return Optional.ofNullable(component.color());
+    }
+    for (Component child : component.children()) {
+      Optional<TextColor> result = color(child, label);
+      if (result.isPresent()) {
+        return result;
+      }
+    }
+    return Optional.empty();
   }
 }

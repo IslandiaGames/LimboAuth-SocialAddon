@@ -30,8 +30,9 @@ White brackets remain distinct from the provider colors; stale database replies
 cannot announce into a later login.
 Server switches do not repeat the invitation; an empty retained SOCIAL row does
 not suppress it. Buttons open the configured bot and explain the linking command
-in their hover text. Modern clients receive brand RGB colors; pre-1.16 clients
-receive distinct legacy colors. `/addtg`, `/addds` and `/addvk` without a code show
+in their hover text. All client versions use the same legacy palette: Telegram
+is aqua (`&b`), Discord is blue (`&9`), and VK is dark blue (`&1`).
+`/addtg`, `/addds` and `/addvk` without a code show
 the corresponding contact, while `/addsocial` shows all configured contacts.
 VK community links are normalized to vk.me message links. Discord profile links
 include a hover instruction to select Message; a bot user ID is not a DM channel ID.

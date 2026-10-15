@@ -17,11 +17,16 @@
 
 package net.elytrium.limboauth.socialaddon.social;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.vk.api.sdk.client.ClientResponse;
 import com.vk.api.sdk.client.TransportClient;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -102,6 +107,37 @@ final class VkTransport implements TransportClient, AutoCloseable {
   @Override
   public ClientResponse delete(String url, String body, Header[] headers) throws IOException {
     return this.call("DELETE", url, body, FORM, headers);
+  }
+
+  /** Poll outside the SDK retry logger so expected shutdown cancellation is not logged as an API failure. */
+  Poll poll(final String server, final String key, final String timestamp, final int waitSeconds) throws IOException {
+    final var url = HttpUrl.get(server).newBuilder().addQueryParameter("act", "a_check")
+        .addQueryParameter("key", key).addQueryParameter("ts", timestamp)
+        .addQueryParameter("wait", Integer.toString(waitSeconds)).build();
+    final var body = JsonParser.parseString(this.http.execute(new Request.Builder().url(url).get().build())).getAsJsonObject();
+    final int failed = body.has("failed") ? body.get("failed").getAsInt() : 0;
+    if (failed == 2 || failed == 3) {
+      return new Poll(failed, timestamp, List.of());
+    }
+    if (failed != 0 && failed != 1) {
+      throw new IOException("Unsupported VK long poll failure code " + failed);
+    }
+    if (!body.has("ts")) {
+      throw new IOException("VK long poll response is missing its timestamp");
+    }
+    final var updates = new ArrayList<JsonObject>();
+    if (failed == 0) {
+      if (!body.has("updates") || !body.get("updates").isJsonArray()) {
+        throw new IOException("VK long poll response is missing updates");
+      }
+      for (final var update : body.getAsJsonArray("updates")) {
+        updates.add(update.getAsJsonObject());
+      }
+    }
+    return new Poll(failed, body.get("ts").getAsString(), List.copyOf(updates));
+  }
+
+  record Poll(int failure, String timestamp, List<JsonObject> updates) {
   }
 
   @Override

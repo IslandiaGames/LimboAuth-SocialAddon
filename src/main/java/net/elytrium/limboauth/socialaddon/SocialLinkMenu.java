@@ -17,7 +17,6 @@
 
 package net.elytrium.limboauth.socialaddon;
 
-import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.api.proxy.Player;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -33,7 +32,6 @@ import net.elytrium.limboauth.socialaddon.social.SocialContactLinks;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.slf4j.Logger;
 
@@ -136,13 +134,12 @@ public final class SocialLinkMenu {
 
   private Component buttons(Player player, List<Contact> selected, Set<SocialPlayer.DatabaseField> linkedServices) {
     Component result = Component.empty();
-    boolean modern = player.getProtocolVersion().compareTo(ProtocolVersion.MINECRAFT_1_16) >= 0;
     for (Contact contact : selected) {
       if (!result.equals(Component.empty())) {
         result = result.append(Component.space());
       }
       Provider provider = contact.provider();
-      Component label = Component.text(provider.label, modern ? provider.color : provider.legacyColor);
+      Component label = Component.text(provider.label, provider.color);
       if (linkedServices.contains(provider.dbField)) {
         label = label.append(Component.text(" ✓", NamedTextColor.GREEN));
       }
@@ -161,22 +158,20 @@ public final class SocialLinkMenu {
   }
 
   private enum Provider {
-    TELEGRAM("Telegram", "addtg", SocialPlayer.DatabaseField.TELEGRAM_ID, TextColor.color(0x2AABEE), NamedTextColor.AQUA),
-    DISCORD("Discord", "addds", SocialPlayer.DatabaseField.DISCORD_ID, TextColor.color(0x5865F2), NamedTextColor.LIGHT_PURPLE),
-    VK("VK", "addvk", SocialPlayer.DatabaseField.VK_ID, TextColor.color(0x0077FF), NamedTextColor.BLUE);
+    TELEGRAM("Telegram", "addtg", SocialPlayer.DatabaseField.TELEGRAM_ID, NamedTextColor.AQUA),
+    DISCORD("Discord", "addds", SocialPlayer.DatabaseField.DISCORD_ID, NamedTextColor.BLUE),
+    VK("VK", "addvk", SocialPlayer.DatabaseField.VK_ID, NamedTextColor.DARK_BLUE);
 
     private final String label;
     private final String alias;
     private final SocialPlayer.DatabaseField dbField;
-    private final TextColor color;
-    private final NamedTextColor legacyColor;
+    private final NamedTextColor color;
 
-    Provider(String label, String alias, SocialPlayer.DatabaseField dbField, TextColor color, NamedTextColor legacyColor) {
+    Provider(String label, String alias, SocialPlayer.DatabaseField dbField, NamedTextColor color) {
       this.label = label;
       this.alias = alias;
       this.dbField = dbField;
       this.color = color;
-      this.legacyColor = legacyColor;
     }
 
     private static Optional<Provider> fromAlias(String alias) {

@@ -19,21 +19,20 @@ package net.elytrium.limboauth.socialaddon.social;
 
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
-import com.vk.api.sdk.actions.LongPoll;
 import com.vk.api.sdk.client.VkApiClient;
 import com.vk.api.sdk.client.actors.GroupActor;
 import com.vk.api.sdk.exceptions.ApiException;
 import com.vk.api.sdk.exceptions.ClientException;
-import com.vk.api.sdk.exceptions.LongPollServerKeyExpiredException;
-import com.vk.api.sdk.objects.callback.longpoll.responses.GetLongPollEventsResponse;
 import com.vk.api.sdk.objects.groups.responses.GetLongPollServerResponse;
 import com.vk.api.sdk.objects.messages.Keyboard;
 import com.vk.api.sdk.objects.messages.KeyboardButton;
 import com.vk.api.sdk.objects.messages.KeyboardButtonAction;
 import com.vk.api.sdk.objects.messages.KeyboardButtonColor;
 import com.vk.api.sdk.objects.messages.TemplateActionTypeNames;
+import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -41,6 +40,9 @@ import net.elytrium.limboauth.socialaddon.Settings;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 
 public class VKSocial extends AbstractSocial {
+  private static final int POLL_WAIT_SECONDS = 25;
+  private static final int INITIAL_RETRY_SECONDS = 5;
+  private static final int MAXIMUM_RETRY_SECONDS = 60;
   private final boolean enabled = Settings.IMP.MAIN.VK.ENABLED;
   private final String token = Settings.IMP.MAIN.VK.TOKEN;
   private volatile VkTransport transport;
@@ -103,29 +105,40 @@ public class VKSocial extends AbstractSocial {
   }
 
   private void poll() {
-    int delay = 5;
+    int delay = INITIAL_RETRY_SECONDS;
+    Optional<GetLongPollServerResponse> serverInfo = Optional.empty();
+    String timestamp = "";
     while (this.polling && !Thread.currentThread().isInterrupted()) {
       try {
-        GetLongPollServerResponse serverInfo = this.vk.groups().getLongPollServer(this.actor, this.actor.getGroupId()).execute();
-        LongPoll longPoll = new LongPoll(this.vk);
-        String ts = serverInfo.getTs();
-        while (this.polling && !Thread.currentThread().isInterrupted()) {
-          GetLongPollEventsResponse response = longPoll.getEvents(serverInfo.getServer(), serverInfo.getKey(), ts).waitTime(25).execute();
-          ts = response.getTs();
-          this.lastPoll = System.nanoTime();
-          this.clearFailure();
-          delay = 5;
-          response.getUpdates().forEach(this::onUpdate);
+        if (serverInfo.isEmpty()) {
+          serverInfo = Optional.of(this.vk.groups().getLongPollServer(this.actor, this.actor.getGroupId()).execute());
+          if (timestamp.isEmpty()) {
+            timestamp = serverInfo.orElseThrow().getTs();
+          }
         }
-      } catch (LongPollServerKeyExpiredException expired) {
-        this.recordFailure(expired);
-        this.lastPoll = 0;
-      } catch (ClientException | ApiException | RuntimeException error) {
+        final var response = this.transport.poll(serverInfo.orElseThrow().getServer(), serverInfo.orElseThrow().getKey(),
+            timestamp, POLL_WAIT_SECONDS);
+        if (response.failure() == 2 || response.failure() == 3) {
+          serverInfo = Optional.empty();
+          if (response.failure() == 3) {
+            timestamp = "";
+          }
+          continue;
+        }
+        timestamp = response.timestamp();
+        this.lastPoll = System.nanoTime();
+        this.clearFailure();
+        delay = INITIAL_RETRY_SECONDS;
+        response.updates().forEach(this::onUpdate);
+      } catch (IOException | ClientException | ApiException | RuntimeException error) {
+        if (!this.polling || Thread.currentThread().isInterrupted()) {
+          return;
+        }
         this.recordFailure(error);
         this.lastPoll = 0;
         try {
           TimeUnit.SECONDS.sleep(delay);
-          delay = Math.min(60, delay * 2);
+          delay = Math.min(MAXIMUM_RETRY_SECONDS, delay * 2);
         } catch (InterruptedException interrupted) {
           Thread.currentThread().interrupt();
         }
