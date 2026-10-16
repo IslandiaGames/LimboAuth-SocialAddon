@@ -160,7 +160,7 @@ public final class SocialLinkMenu {
   private enum Provider {
     TELEGRAM("Telegram", "addtg", SocialPlayer.DatabaseField.TELEGRAM_ID, NamedTextColor.AQUA),
     DISCORD("Discord", "addds", SocialPlayer.DatabaseField.DISCORD_ID, NamedTextColor.BLUE),
-    VK("VK", "addvk", SocialPlayer.DatabaseField.VK_ID, NamedTextColor.DARK_BLUE);
+    VK("VK", "addvk", SocialPlayer.DatabaseField.VK_ID, NamedTextColor.DARK_AQUA);
 
     private final String label;
     private final String alias;

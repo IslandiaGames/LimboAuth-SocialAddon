@@ -197,7 +197,7 @@ class SocialLinkTest {
         assertThat(urls(message.getValue())).hasSize(3);
         assertThat(color(message.getValue(), "Telegram")).contains(NamedTextColor.AQUA);
         assertThat(color(message.getValue(), "Discord")).contains(NamedTextColor.BLUE);
-        assertThat(color(message.getValue(), "VK")).contains(NamedTextColor.DARK_BLUE);
+        assertThat(color(message.getValue(), "VK")).contains(NamedTextColor.DARK_AQUA);
       }
     }
     Player disconnected = player();
