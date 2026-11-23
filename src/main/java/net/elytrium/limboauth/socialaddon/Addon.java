@@ -82,6 +82,7 @@ import org.slf4j.Logger;
     },
     dependencies = {
         @Dependency(id = "limboauth"),
+        @Dependency(id = "limboapi"),
         @Dependency(id = "luckperms", optional = true)
     }
 )
@@ -606,6 +607,7 @@ public class Addon {
     this.identity = GameIdentity.open(this, this.plugin, this.dao);
     if (this.identity != null) {
       this.server.getEventManager().register(this, this.identity);
+      this.server.getEventManager().register(this, this.identity.admission());
     }
     this.authListener = new LimboAuthListener(this, this.plugin, this.dao, this.socialManager,
         this.keyboard, this.geoIp

@@ -31,6 +31,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
+import net.elytrium.limboapi.api.LimboFactory;
 import net.elytrium.limboauth.LimboAuth;
 import net.elytrium.limboauth.model.RegisteredPlayer;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
@@ -58,7 +59,7 @@ class GameIdentityTest {
     social.setTelegramID(123L);
     var socials = (Dao<SocialPlayer, String>) mock(Dao.class);
     when(socials.queryForId("playerone")).thenReturn(social);
-    try (var bridge = new GameIdentity(mock(Addon.class), auth, socials, KEY, URI.create("http://127.0.0.1:1"),
+    try (var bridge = new GameIdentity(mock(Addon.class), auth, socials, mock(LimboFactory.class), KEY, URI.create("http://127.0.0.1:1"),
         "https://islandia.test/account/", new InetSocketAddress("127.0.0.1", 0))) {
       assertThat(verify(bridge, "wrong-service-key", "correct-game-password").statusCode()).isEqualTo(403);
       assertThat(verify(bridge, KEY, "wrong-password").body()).isEqualTo("null");

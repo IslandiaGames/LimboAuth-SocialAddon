@@ -1,7 +1,7 @@
 # Islandia SocialAddon
 
 Fork of Elytrium LimboAuth SocialAddon, based on commit
-`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.7`.
+`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.8`.
 
 ## Build and verification
 
@@ -72,10 +72,15 @@ requests are rejected instead of replacing an existing waiting event.
 
 The deployment sets `ISLANDIA_IDENTITY_ENABLED` and supplies the web service URL,
 the public account URL and a shared service key to the proxy. The private HTTP
-listener verifies the existing LimboAuth password and native TOTP. Minecraft
-admission checks the new IP before the first backend connection and records trust
-after that connection succeeds. The site handles confirmation, recovery and
-changes to linked channels. Staff assignments are synchronized through marked
+listener verifies the existing LimboAuth password and native TOTP.
+
+The add-on queues its check after LimboAuth in the LimboAPI login queue. A cached
+login that requires a fresh password returns to LimboAuth on the same connection.
+After password verification, a protected player on a new IP waits in the configured
+authentication world. The identity service gives the player five minutes to answer
+and records the IP only after the first backend connection succeeds.
+
+The site handles confirmation, recovery and changes to linked channels. Staff assignments are synchronized through marked
 LuckPerms groups so purchases and independent grants retain their own sources.
 
 ## Provider lifecycle
@@ -153,7 +158,7 @@ The existing mock tests do not establish an end-to-end login latency improvement
 
 Build the fork with the pinned wrapper using JDK 21:
 `bash gradlew test check shadowJar`. Copy
-`build/libs/LimboAuth-SocialAddon-1.0.11-islandia.7.jar` into the disposable Velocity
+`build/libs/LimboAuth-SocialAddon-1.0.11-islandia.8.jar` into the disposable Velocity
 template's `plugins` directory, together with the matching SocialAddon config.
 The selector checks the actual plugin ID/version before removing previous copies.
 Changing source/version files alone does not update the deployed plugin. No

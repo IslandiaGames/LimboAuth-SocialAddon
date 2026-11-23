@@ -21,13 +21,10 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.command.CommandExecuteEvent;
-import com.velocitypowered.api.event.connection.DisconnectEvent;
-import com.velocitypowered.api.event.player.ServerPostConnectEvent;
-import com.velocitypowered.api.event.player.ServerPreConnectEvent;
+import com.velocitypowered.api.plugin.PluginContainer;
 import com.velocitypowered.api.proxy.Player;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -44,18 +41,15 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import net.elytrium.limboapi.api.LimboFactory;
 import net.elytrium.limboauth.LimboAuth;
 import net.elytrium.limboauth.event.ChangePasswordEvent;
-import net.elytrium.limboauth.event.PostAuthorizationEvent;
-import net.elytrium.limboauth.event.PostRegisterEvent;
 import net.elytrium.limboauth.event.PreAuthorizationEvent;
 import net.elytrium.limboauth.handler.AuthSessionHandler;
 import net.elytrium.limboauth.model.RegisteredPlayer;
@@ -80,16 +74,14 @@ public final class GameIdentity implements AutoCloseable {
   private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
   private final ScheduledExecutorService worker = Executors.newScheduledThreadPool(4);
   private final ThreadPoolExecutor requests = new ThreadPoolExecutor(2, 6, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(24));
-  private final Set<Player> verified = ConcurrentHashMap.newKeySet();
-  private final Map<Player, String> admission = new ConcurrentHashMap<>();
+  private final GameAdmission admission;
   private final Map<String, Binding> bindings = new ConcurrentHashMap<>();
   private final StaffGroupSync groups = new StaffGroupSync();
   private final HttpServer server;
-  private volatile boolean stopped;
 
   private record Binding(String nick, String field, long id, long until) { }
 
-  GameIdentity(Addon addon, LimboAuth auth, Dao<SocialPlayer, String> socials, String key,
+  GameIdentity(Addon addon, LimboAuth auth, Dao<SocialPlayer, String> socials, LimboFactory limbo, String key,
                URI service, String accountUrl, InetSocketAddress address) throws IOException {
     this.addon = addon;
     this.auth = auth;
@@ -97,6 +89,7 @@ public final class GameIdentity implements AutoCloseable {
     this.key = key;
     this.service = service;
     this.accountUrl = accountUrl;
+    this.admission = new GameAdmission(this, auth, limbo, this.worker);
     this.server = HttpServer.create(address, 16);
     this.server.setExecutor(this.requests);
     this.server.createContext("/v1/", this::handle);
@@ -117,13 +110,18 @@ public final class GameIdentity implements AutoCloseable {
       throw new IllegalStateException("Missing identity service key");
     }
     try {
-      return new GameIdentity(addon, auth, socials, key,
+      var limbo = (LimboFactory) addon.getServer().getPluginManager().getPlugin("limboapi").flatMap(PluginContainer::getInstance).orElseThrow();
+      return new GameIdentity(addon, auth, socials, limbo, key,
           URI.create(System.getenv().getOrDefault("ISLANDIA_IDENTITY_SERVICE", "http://islandia-staff:8080")),
           System.getenv().getOrDefault("ISLANDIA_PUBLIC_ORIGIN", "https://islandia.su") + "/account/",
           new InetSocketAddress(Integer.parseInt(System.getenv().getOrDefault("ISLANDIA_IDENTITY_PORT", "18187"))));
     } catch (IOException failure) {
       throw new IllegalStateException("Cannot start identity service", failure);
     }
+  }
+
+  GameAdmission admission() {
+    return this.admission;
   }
 
   int port() {
@@ -311,119 +309,24 @@ public final class GameIdentity implements AutoCloseable {
         .clickEvent(ClickEvent.openUrl(this.accountUrl + "?forgot=1&nickname=" + player.getUsername())));
   }
 
-  @Subscribe
-  public void authorized(PostAuthorizationEvent event) {
-    this.verified.add(event.getPlayer().getProxyPlayer());
-  }
-
-  @Subscribe
-  public void registered(PostRegisterEvent event) {
-    this.verified.add(event.getPlayer().getProxyPlayer());
-  }
-
-  @Subscribe(order = PostOrder.LAST)
-  public EventTask entering(ServerPreConnectEvent event) {
-    Player player = event.getPlayer();
-    if (player.getCurrentServer().isPresent() || !event.getResult().isAllowed()) {
-      return null;
-    }
-    return EventTask.resumeWhenComplete(CompletableFuture.runAsync(() -> this.begin(event), this.worker)
-        .thenCompose(ignored -> this.waitForAnswer(event)).exceptionally(failure -> {
-          this.deny(event, "Проверка входа недоступна. Попробуйте войти снова.");
-          return null;
-        }));
-  }
-
-  private void begin(ServerPreConnectEvent event) {
-    Player player = event.getPlayer();
+  JsonObject start(Player player, boolean passwordChecked) {
     String nick = player.getUsername().toLowerCase(Locale.ROOT);
     try {
       var account = this.auth.getPlayerDao().queryForId(nick);
       if (account == null || !player.getUniqueId().toString().equalsIgnoreCase(account.getUuid())) {
-        this.deny(event, "Не удалось сверить игровой аккаунт. Подключитесь снова.");
-        return;
+        throw new IllegalStateException("Unknown game account");
       }
       var social = this.socials.queryForId(nick);
       if (social != null && social.isBlocked()) {
-        this.deny(event, "Аккаунт заблокирован.");
-        return;
+        JsonObject blocked = new JsonObject();
+        blocked.addProperty("state", "blocked");
+        return blocked;
       }
-      String ip = player.getRemoteAddress().getAddress().getHostAddress();
-      var result = this.post("start", Map.of("id", player.getUniqueId(), "nickname", player.getUsername(), "ip", ip,
-          "protectedAccount", social != null && social.isTotpEnabled(), "hasSocial", hasSocial(social), "passwordChecked", this.verified.remove(player)));
-      if ("password".equals(result.get("state").getAsString())) {
-        this.deny(event, "Подключитесь ещё раз и введите игровой пароль.");
-        return;
-      }
-      String token = result.get("attempt").getAsString();
-      this.admission.put(player, token);
-      if (!player.isActive()) {
-        this.leave(player);
-      } else if ("pending".equals(result.get("state").getAsString())) {
-        player.sendMessage(Component.text("Подтвердите вход в почте или привязанном мессенджере. Запрос действует 5 минут."));
-        player.sendMessage(Component.text("Отправить повторно через минуту")
-            .clickEvent(ClickEvent.openUrl(this.accountUrl + "#resend=" + token + "&ip=" + ip)));
-      }
+      return this.post("start", Map.of("id", player.getUniqueId(), "nickname", player.getUsername(),
+          "ip", player.getRemoteAddress().getAddress().getHostAddress(), "protectedAccount", social != null && social.isTotpEnabled(),
+          "hasSocial", hasSocial(social), "passwordChecked", passwordChecked));
     } catch (SQLException failure) {
       throw new IllegalStateException("Cannot load social protection", failure);
-    }
-  }
-
-  private CompletableFuture<Void> waitForAnswer(ServerPreConnectEvent event) {
-    Player player = event.getPlayer();
-    String token = this.admission.get(player);
-    if (token == null || !player.isActive() || this.stopped) {
-      event.setResult(ServerPreConnectEvent.ServerResult.denied());
-      return CompletableFuture.completedFuture(null);
-    }
-    String state = this.post("poll", this.attempt(player, token)).get("state").getAsString();
-    if ("pending".equals(state)) {
-      return CompletableFuture.runAsync(() -> { }, CompletableFuture.delayedExecutor(2, TimeUnit.SECONDS, this.worker))
-          .thenCompose(ignored -> this.waitForAnswer(event));
-    }
-    if (!"approved".equals(state)) {
-      this.deny(event, "Вход отклонён. При необходимости смените пароль в аккаунте Islandia.");
-    }
-    return CompletableFuture.completedFuture(null);
-  }
-
-  private Map<String, String> attempt(Player player, String token) {
-    return Map.of("token", token, "ip", player.getRemoteAddress().getAddress().getHostAddress());
-  }
-
-  @Subscribe
-  public void entered(ServerPostConnectEvent event) {
-    Player player = event.getPlayer();
-    String token = this.admission.remove(player);
-    if (token != null && event.getPreviousServer() == null && player.isActive()) {
-      try {
-        var result = this.post("finish", this.attempt(player, token));
-        if (!"done".equals(result.get("state").getAsString())) {
-          this.revoke(player.getUsername());
-        }
-      } catch (RuntimeException failure) {
-        this.revoke(player.getUsername());
-      }
-    }
-  }
-
-  private void deny(ServerPreConnectEvent event, String reason) {
-    event.setResult(ServerPreConnectEvent.ServerResult.denied());
-    this.auth.removePlayerFromCache(event.getPlayer().getUsername());
-    event.getPlayer().disconnect(Component.text(reason));
-  }
-
-  @Subscribe
-  public void left(DisconnectEvent event) {
-    this.leave(event.getPlayer());
-  }
-
-  private void leave(Player player) {
-    this.verified.remove(player);
-    String token = this.admission.remove(player);
-    if (token != null) {
-      this.auth.removePlayerFromCache(player.getUsername());
-      this.worker.execute(() -> this.post("cancel", this.attempt(player, token)));
     }
   }
 
@@ -446,12 +349,17 @@ public final class GameIdentity implements AutoCloseable {
     }
   }
 
-  private JsonObject post(String action, Object payload) {
+  JsonObject post(String action, Object payload) {
     HttpRequest request = HttpRequest.newBuilder(this.service.resolve("/internal/identity/" + action))
         .timeout(Duration.ofSeconds(12)).header("Authorization", "Bearer " + this.key).header("Content-Type", "application/json")
         .POST(HttpRequest.BodyPublishers.ofString(JSON.toJson(payload))).build();
     try {
       var result = this.client.send(request, HttpResponse.BodyHandlers.ofString());
+      if (result.statusCode() == 409 && "poll".equals(action)) {
+        JsonObject expired = new JsonObject();
+        expired.addProperty("state", "expired");
+        return expired;
+      }
       if (result.statusCode() / 100 != 2) {
         throw new IllegalStateException("Identity service unavailable");
       }
@@ -474,10 +382,9 @@ public final class GameIdentity implements AutoCloseable {
 
   @Override
   public void close() {
-    this.stopped = true;
+    this.admission.close();
     this.server.stop(0);
-    this.admission.keySet().forEach(player -> player.disconnect(Component.text("Переподключитесь к Islandia.")));
-    this.worker.shutdownNow();
+    this.worker.shutdown();
     this.requests.shutdownNow();
   }
 }
