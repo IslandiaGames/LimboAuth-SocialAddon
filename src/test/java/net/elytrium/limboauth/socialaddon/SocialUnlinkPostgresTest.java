@@ -33,8 +33,6 @@ import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer.DatabaseField;
 import net.elytrium.limboauth.thirdparty.com.j256.ormlite.dao.Dao;
 import net.elytrium.limboauth.thirdparty.com.j256.ormlite.dao.DaoManager;
-import net.elytrium.limboauth.thirdparty.com.j256.ormlite.jdbc.JdbcSingleConnectionSource;
-import net.elytrium.limboauth.thirdparty.com.j256.ormlite.jdbc.db.PostgresDatabaseType;
 import net.elytrium.limboauth.thirdparty.com.j256.ormlite.stmt.UpdateBuilder;
 import net.elytrium.limboauth.thirdparty.com.j256.ormlite.table.TableUtils;
 import org.junit.jupiter.api.AfterEach;
@@ -50,7 +48,7 @@ import org.junit.jupiter.params.provider.ValueSource;
     disabledReason = "Requires a dedicated local PostgreSQL database named islandia_social_unlink_test")
 class SocialUnlinkPostgresTest {
 
-  private JdbcSingleConnectionSource source;
+  private TestConnectionSource source;
   private Dao<SocialPlayer, String> dao;
   private SocialUnlinkRepository repository;
   private boolean schemaCreated;
@@ -84,7 +82,7 @@ class SocialUnlinkPostgresTest {
     SocialPlayer player = linkedPlayer();
     this.dao.create(player);
     assertThat(this.repository.unlink(player, provider, false)).isEqualTo(SocialUnlinkRepository.Result.ONE_UNLINKED);
-    try (JdbcSingleConnectionSource reopened = connectionSource()) {
+    try (TestConnectionSource reopened = connectionSource()) {
       Dao<SocialPlayer, String> reopenedDao = DaoManager.createDao(reopened, SocialPlayer.class);
       SocialPlayer actual = reopenedDao.queryForId(player.getLowercaseNickname());
       assertThat(provider.getIdFor(actual)).isNull();
@@ -186,7 +184,7 @@ class SocialUnlinkPostgresTest {
   }
 
   private SocialUnlinkRepository.Result compete(CountDownLatch ready, CountDownLatch start) throws Exception {
-    try (JdbcSingleConnectionSource separate = connectionSource()) {
+    try (TestConnectionSource separate = connectionSource()) {
       Dao<SocialPlayer, String> separateDao = DaoManager.createDao(separate, SocialPlayer.class);
       SocialPlayer snapshot = separateDao.queryForId("unlink_test");
       ready.countDown();
@@ -202,13 +200,13 @@ class SocialUnlinkPostgresTest {
     assertThat(update.update()).isEqualTo(1);
   }
 
-  private static JdbcSingleConnectionSource connectionSource() throws SQLException {
+  private static TestConnectionSource connectionSource() throws SQLException {
     String url = System.getenv("ISLANDIA_SOCIAL_TEST_JDBC_URL");
     String user = System.getenv().getOrDefault("ISLANDIA_SOCIAL_TEST_JDBC_USER", "social_test");
     String password = System.getenv().getOrDefault("ISLANDIA_SOCIAL_TEST_JDBC_PASSWORD", "");
     Connection connection = DriverManager.getConnection(url, user, password);
     try {
-      return new JdbcSingleConnectionSource(url, new PostgresDatabaseType(), connection);
+      return new TestConnectionSource(url, connection);
     } catch (SQLException exception) {
       connection.close();
       throw exception;

@@ -21,6 +21,7 @@ import com.google.inject.Inject;
 import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.permission.Tristate;
@@ -80,7 +81,8 @@ import org.slf4j.Logger;
         "Elytrium (https://elytrium.net/)",
     },
     dependencies = {
-        @Dependency(id = "limboauth")
+        @Dependency(id = "limboauth"),
+        @Dependency(id = "luckperms", optional = true)
     }
 )
 public class Addon {
@@ -92,7 +94,7 @@ public class Addon {
   private static final String KICK_BTN = "kick";
   private static final String RESTORE_BTN = "restore";
   private static final String UNLINK_BTN = "unlink";
-  private static final String PLUGIN_MINIMUM_VERSION = "1.1.0";
+  private static final String PLUGIN_MINIMUM_VERSION = "1.1.14";
 
   private static Serializer SERIALIZER;
 
@@ -116,6 +118,11 @@ public class Addon {
   private ScheduledTask linkInvitationTask;
   private SocialLinkListener linkListener;
   private LimboAuthListener authListener;
+  private volatile GameIdentity identity;
+
+  public GameIdentity identity() {
+    return this.identity;
+  }
 
   static {
     Objects.requireNonNull(org.apache.commons.logging.impl.LogFactoryImpl.class);
@@ -208,6 +215,10 @@ public class Addon {
         Settings.IMP.MAIN, () -> this.dao, this.socialManager, this.keyboard, (dbField, id, message) -> {
           for (String socialRegisterCmd : Settings.IMP.MAIN.SOCIAL_REGISTER_CMDS) {
             if (SocialBotMessageListener.matchesCommand(message, socialRegisterCmd)) {
+              if (this.identity != null) {
+                this.socialManager.broadcastMessage(dbField, id, "Зарегистрируйте аккаунт в Minecraft на play.islandia.su.");
+                return;
+              }
               int desiredLength = socialRegisterCmd.strip().length();
 
               if (message.length() <= desiredLength) {
@@ -271,6 +282,10 @@ public class Addon {
                 return;
               }
 
+              if (this.identity != null) {
+                this.identity.inviteChannel(message.substring(desiredLength).strip(), dbField, id);
+                return;
+              }
               String[] args = message.substring(desiredLength).strip().split("\\s+");
               if (this.dao.queryForEq(dbField, id).size() != 0) {
                 this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_ALREADY);
@@ -389,6 +404,10 @@ public class Addon {
     });
 
     this.socialManager.addButtonEvent(TOTP_BTN, (dbField, id) -> {
+      if (this.identity != null) {
+        this.socialManager.broadcastMessage(dbField, id, "Управление аккаунтом Islandia: " + this.identity.accountUrl());
+        return;
+      }
       List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
 
       if (socialPlayerList.size() == 0) {
@@ -462,6 +481,10 @@ public class Addon {
     });
 
     this.socialManager.addButtonEvent(RESTORE_BTN, (dbField, id) -> {
+      if (this.identity != null) {
+        this.socialManager.broadcastMessage(dbField, id, "Управление аккаунтом Islandia: " + this.identity.accountUrl() + "?forgot=1");
+        return;
+      }
       List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
 
       if (socialPlayerList.size() == 0) {
@@ -502,6 +525,10 @@ public class Addon {
     });
 
     this.socialManager.addButtonEvent(UNLINK_BTN, (dbField, id) -> {
+      if (this.identity != null) {
+        this.socialManager.broadcastMessage(dbField, id, "Управление аккаунтом Islandia: " + this.identity.accountUrl());
+        return;
+      }
       if (Settings.IMP.MAIN.DISABLE_UNLINK) {
         this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.UNLINK_DISABLED, this.keyboard);
         return;
@@ -549,6 +576,9 @@ public class Addon {
   }
 
   public void onReload() throws SQLException {
+    if (this.identity != null) {
+      this.identity.close();
+    }
     this.stopLinkInvitations();
     if (this.authListener != null) {
       this.authListener.stop();
@@ -564,6 +594,19 @@ public class Addon {
 
     this.nicknamePattern = Pattern.compile(net.elytrium.limboauth.Settings.IMP.MAIN.ALLOWED_NICKNAME_REGEX);
 
+    if (GameIdentity.enabled()) {
+      this.identity = null;
+      this.server.getEventManager().register(this, ServerPreConnectEvent.class, PostOrder.LAST, transfer -> {
+        if (this.identity == null) {
+          transfer.setResult(ServerPreConnectEvent.ServerResult.denied());
+          transfer.getPlayer().disconnect(Component.text("Вход Islandia временно недоступен."));
+        }
+      });
+    }
+    this.identity = GameIdentity.open(this, this.plugin, this.dao);
+    if (this.identity != null) {
+      this.server.getEventManager().register(this, this.identity);
+    }
     this.authListener = new LimboAuthListener(this, this.plugin, this.dao, this.socialManager,
         this.keyboard, this.geoIp
     );
@@ -604,6 +647,9 @@ public class Addon {
   }
 
   private void onProxyShutdown(ProxyShutdownEvent event) {
+    if (this.identity != null) {
+      this.identity.close();
+    }
     this.stopLinkInvitations();
     if (this.authListener != null) {
       this.authListener.stop();

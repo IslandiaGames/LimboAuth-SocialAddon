@@ -1,7 +1,7 @@
 # Islandia SocialAddon
 
 Fork of Elytrium LimboAuth SocialAddon, based on commit
-`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.6`.
+`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.7`.
 
 ## Build and verification
 
@@ -36,7 +36,7 @@ is aqua (`&b`), Discord is blue (`&9`), and VK is dark aqua (`&3`).
 the corresponding contact, while `/addsocial` shows all configured contacts.
 VK community links are normalized to vk.me message links. Discord profile links
 include a hover instruction to select Message; a bot user ID is not a DM channel ID.
-The existing challenge-code confirmation and opt-in 2FA remain unchanged.
+With shared identity enabled, the bot sends a single-use link. The player signs in to the matching game account and confirms the binding on the account page. Standalone deployments use the in-game challenge code.
 
 Unknown or incomplete text commands receive help. Unlinked users get linking
 instructions, linked users get the account keyboard. Commands ignore surrounding
@@ -67,6 +67,16 @@ confirmations; they never complete them as authenticated. Registration, response
 consumption and stop share one ownership lock, so a late availability result
 cannot publish a new waiting confirmation after shutdown. Duplicate pending
 requests are rejected instead of replacing an existing waiting event.
+
+## Islandia account service
+
+The deployment sets `ISLANDIA_IDENTITY_ENABLED` and supplies the web service URL,
+the public account URL and a shared service key to the proxy. The private HTTP
+listener verifies the existing LimboAuth password and native TOTP. Minecraft
+admission checks the new IP before the first backend connection and records trust
+after that connection succeeds. The site handles confirmation, recovery and
+changes to linked channels. Staff assignments are synchronized through marked
+LuckPerms groups so purchases and independent grants retain their own sources.
 
 ## Provider lifecycle
 
@@ -143,7 +153,7 @@ The existing mock tests do not establish an end-to-end login latency improvement
 
 Build the fork with the pinned wrapper using JDK 21:
 `bash gradlew test check shadowJar`. Copy
-`build/libs/LimboAuth-SocialAddon-1.0.11-islandia.6.jar` into the disposable Velocity
+`build/libs/LimboAuth-SocialAddon-1.0.11-islandia.7.jar` into the disposable Velocity
 template's `plugins` directory, together with the matching SocialAddon config.
 The selector checks the actual plugin ID/version before removing previous copies.
 Changing source/version files alone does not update the deployed plugin. No

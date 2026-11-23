@@ -32,8 +32,6 @@ import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer.DatabaseField;
 import net.elytrium.limboauth.thirdparty.com.j256.ormlite.dao.Dao;
 import net.elytrium.limboauth.thirdparty.com.j256.ormlite.dao.DaoManager;
-import net.elytrium.limboauth.thirdparty.com.j256.ormlite.jdbc.JdbcSingleConnectionSource;
-import net.elytrium.limboauth.thirdparty.com.j256.ormlite.jdbc.db.PostgresDatabaseType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -98,7 +96,7 @@ class SocialUnlinkRepositoryTest {
   private static final class Fixture implements AutoCloseable {
 
     private final PreparedStatement statement = mock(PreparedStatement.class);
-    private final JdbcSingleConnectionSource source;
+    private final TestConnectionSource source;
     private final SocialUnlinkRepository repository;
 
     private Fixture() throws SQLException {
@@ -110,7 +108,7 @@ class SocialUnlinkRepositoryTest {
       });
       try {
         when(this.statement.executeUpdate()).thenReturn(1);
-        this.source = new JdbcSingleConnectionSource("jdbc:postgresql://localhost/unlink_test", new PostgresDatabaseType(), connection);
+        this.source = new TestConnectionSource("jdbc:postgresql://localhost/unlink_test", connection);
         Dao<SocialPlayer, String> dao = DaoManager.createDao(this.source, SocialPlayer.class);
         this.repository = new SocialUnlinkRepository(dao);
       } catch (SQLException | RuntimeException exception) {
@@ -124,7 +122,7 @@ class SocialUnlinkRepositoryTest {
     }
 
     @Override
-    public void close() throws SQLException {
+    public void close() throws Exception {
       try {
         this.statement.close();
       } finally {

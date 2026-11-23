@@ -75,6 +75,7 @@ public class LimboAuthListener {
   private volatile boolean stopped;
 
   private final GeoIp geoIp;
+  private final boolean unifiedIdentity;
   private final boolean auth2faWithoutPassword = Settings.IMP.MAIN.AUTH_2FA_WITHOUT_PASSWORD;
 
   public LimboAuthListener(final Addon addon, final LimboAuth plugin, final Dao<SocialPlayer, String> socialPlayerDao,
@@ -91,6 +92,7 @@ public class LimboAuthListener {
                     final SocialManager socialManager, final List<List<AbstractSocial.ButtonItem>> keyboard,
                     final GeoIp geoIp, final ExecutorService notifications) {
     this.addon = addon;
+    this.unifiedIdentity = addon != null && addon.identity() != null;
     this.plugin = plugin;
     this.socialPlayerDao = socialPlayerDao;
     this.socialManager = socialManager;
@@ -154,7 +156,7 @@ public class LimboAuthListener {
       return;
     }
 
-    if (this.auth2faWithoutPassword) {
+    if (!this.unifiedIdentity && this.auth2faWithoutPassword) {
       if (player != null && player.isTotpEnabled()) {
         event.setResult(TaskEvent.Result.WAIT);
         this.plugin.getAuthServer().spawnPlayer(proxyPlayer, new PreLoginLimboSessionHandler(this, event, player));
@@ -165,7 +167,7 @@ public class LimboAuthListener {
   @Subscribe
   public void onAuthCompleted(PostAuthorizationEvent event) {
     Player proxyPlayer = event.getPlayer().getProxyPlayer();
-    if (!this.auth2faWithoutPassword) {
+    if (!this.unifiedIdentity && !this.auth2faWithoutPassword) {
       SocialPlayer player = this.queryPlayer(proxyPlayer);
 
       if (player != null && player.isTotpEnabled()) {
