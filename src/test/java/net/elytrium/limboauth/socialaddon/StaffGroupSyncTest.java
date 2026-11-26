@@ -18,15 +18,21 @@
 package net.elytrium.limboauth.socialaddon;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import net.luckperms.api.LuckPerms;
 import net.luckperms.api.context.ImmutableContextSet;
+import net.luckperms.api.messaging.MessagingService;
 import net.luckperms.api.model.data.DataMutateResult;
 import net.luckperms.api.model.data.NodeMap;
 import net.luckperms.api.model.user.User;
@@ -34,6 +40,47 @@ import net.luckperms.api.node.types.InheritanceNode;
 import org.junit.jupiter.api.Test;
 
 class StaffGroupSyncTest {
+
+  @Test
+  void publishes_a_saved_assignment_or_removal_only_once_and_defers_group_reload_until_all_saves() {
+    var api = mock(LuckPerms.class);
+    var messenger = mock(MessagingService.class);
+    when(api.getMessagingService()).thenReturn(Optional.of(messenger));
+    var updates = new StaffGroupSync.Updates();
+    updates.publish(api);
+    verify(api, never()).getMessagingService();
+    var user = mock(User.class);
+    updates.userSaved(user);
+    updates.publish(api);
+    updates.publish(api);
+    verify(messenger).pushUserUpdate(user);
+    updates.userSaved(user);
+    updates.groupSaved();
+    updates.userSaved(user);
+    verify(messenger, never()).pushUpdate();
+    updates.publish(api);
+    verify(messenger).pushUpdate();
+    verify(messenger, times(1)).pushUserUpdate(user);
+  }
+
+  @Test
+  void retries_flush_after_a_messaging_failure_even_if_no_more_data_has_changed() {
+    var api = mock(LuckPerms.class);
+    var messenger = mock(MessagingService.class);
+    var user = mock(User.class);
+    when(api.getMessagingService()).thenReturn(Optional.of(messenger));
+    doThrow(new IllegalStateException("unavailable")).when(messenger).pushUserUpdate(user);
+    var updates = new StaffGroupSync.Updates();
+    updates.userSaved(user);
+    assertThatThrownBy(() -> updates.publish(api)).isInstanceOf(IllegalStateException.class);
+    when(api.getMessagingService()).thenReturn(Optional.empty());
+    updates.publish(api);
+    when(api.getMessagingService()).thenReturn(Optional.of(messenger));
+    updates.publish(api);
+    updates.publish(api);
+    verify(messenger).pushUpdate();
+    verify(messenger).pushUserUpdate(user);
+  }
 
   @Test
   void an_unchanged_owned_grant_or_cleared_tombstone_needs_no_user_load() {

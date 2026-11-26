@@ -22,6 +22,7 @@ import com.google.gson.JsonObject;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -32,6 +33,7 @@ import java.util.UUID;
 import java.util.function.Predicate;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
+import net.luckperms.api.messaging.MessagingService;
 import net.luckperms.api.model.group.Group;
 import net.luckperms.api.model.user.User;
 import net.luckperms.api.node.Node;
@@ -47,6 +49,50 @@ final class StaffGroupSync {
 
   private static final String PREFIX = "islandia-staff-";
   private static final String MARKER = "islandia.staff.managed-group";
+
+  private final Updates updates = new Updates();
+
+  // A full sync reloads groups and online users on receiving servers. After an
+  // unavailable/throwing messenger, one retry also covers all saved user updates.
+  static final class Updates {
+
+    private boolean full;
+    private final List<User> users = new ArrayList<>();
+
+    void groupSaved() {
+      this.full = true;
+      this.users.clear();
+    }
+
+    void userSaved(User user) {
+      if (!this.full) {
+        this.users.add(user);
+      }
+    }
+
+    void publish(LuckPerms api) {
+      if (!this.full && this.users.isEmpty()) {
+        return;
+      }
+      boolean updateAll = this.full;
+      this.full = true;
+      try {
+        var service = api.getMessagingService();
+        if (service.isEmpty()) {
+          return;
+        }
+        MessagingService messenger = service.get();
+        if (updateAll) {
+          messenger.pushUpdate();
+        } else {
+          this.users.forEach(messenger::pushUserUpdate);
+        }
+        this.full = false;
+      } finally {
+        this.users.clear();
+      }
+    }
+  }
 
   boolean exists(String name) {
     return assignable(name) && LuckPermsProvider.get().getGroupManager().loadGroup(name).join().isPresent();
@@ -73,6 +119,7 @@ final class StaffGroupSync {
         LOGGER.warn("Staff group synchronization failed for {}: {}", entry.getKey(), failure.getClass().getSimpleName());
       }
     }
+    this.updates.publish(api);
   }
 
   private void syncUser(LuckPerms api, UUID id, JsonArray groups, Collection<Node> actual, Set<String> prepared, Set<String> managed) {
@@ -106,6 +153,7 @@ final class StaffGroupSync {
     boolean changed = this.updateUser(user, desired, isManaged);
     if (changed) {
       api.getUserManager().saveUser(user).join();
+      this.updates.userSaved(user);
     }
   }
 
@@ -178,6 +226,7 @@ final class StaffGroupSync {
     changed |= group.data().add(InheritanceNode.builder(name).build()).wasSuccessful();
     if (changed) {
       manager.saveGroup(group).join();
+      this.updates.groupSaved();
     }
     return true;
   }
