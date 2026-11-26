@@ -9,7 +9,7 @@ plugins {
 }
 
 setGroup("net.elytrium")
-setVersion("1.0.11-islandia.8")
+setVersion("1.0.11-islandia.9")
 
 compileJava {
     getOptions().setEncoding("UTF-8")
@@ -40,10 +40,12 @@ repositories {
 
     maven {
         setName("elytrium-repo")
+        content { excludeModule("com.velocitypowered", "velocity-proxy") }
         setUrl("https://maven.elytrium.net/repo/")
     }
     maven {
         setName("papermc-repo")
+        content { excludeModule("com.velocitypowered", "velocity-proxy") }
         setUrl("https://repo.papermc.io/repository/maven-public/")
     }
     maven {

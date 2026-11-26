@@ -1,7 +1,7 @@
 # Islandia SocialAddon
 
 Fork of Elytrium LimboAuth SocialAddon, based on commit
-`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.8`.
+`1bd5d1a332f4ffc42bc1c84299e4c00cbab7093d`. Version: `1.0.11-islandia.9`.
 
 ## Build and verification
 
@@ -158,7 +158,7 @@ The existing mock tests do not establish an end-to-end login latency improvement
 
 Build the fork with the pinned wrapper using JDK 21:
 `bash gradlew test check shadowJar`. Copy
-`build/libs/LimboAuth-SocialAddon-1.0.11-islandia.8.jar` into the disposable Velocity
+`build/libs/LimboAuth-SocialAddon-1.0.11-islandia.9.jar` into the disposable Velocity
 template's `plugins` directory, together with the matching SocialAddon config.
 The selector checks the actual plugin ID/version before removing previous copies.
 Changing source/version files alone does not update the deployed plugin. No

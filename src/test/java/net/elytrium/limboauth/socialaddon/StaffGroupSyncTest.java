@@ -36,6 +36,28 @@ import org.junit.jupiter.api.Test;
 class StaffGroupSyncTest {
 
   @Test
+  void an_unchanged_owned_grant_or_cleared_tombstone_needs_no_user_load() {
+    var media = parent("islandia-staff-media");
+    var unmanaged = parent("islandia-staff-custom");
+    var expired = parent("islandia-staff-legacy");
+    when(expired.hasExpiry()).thenReturn(true);
+    assertThat(StaffGroupSync.alreadyApplied(List.of(), Set.of(), name -> false)).isTrue();
+    assertThat(StaffGroupSync.alreadyApplied(List.of(media, unmanaged, expired), Set.of("islandia-staff-media"), "islandia-staff-media"::equals)).isTrue();
+    assertThat(StaffGroupSync.alreadyApplied(List.of(media), Set.of(), name -> true)).isFalse();
+  }
+
+  @Test
+  void old_wrapper_names_stay_stable_and_long_real_groups_fit_luckperms_storage() {
+    assertThat(StaffGroupSync.wrapperName("media")).isEqualTo("islandia-staff-media");
+    String limit = "abcdefghijklmnopqrstu";
+    assertThat(StaffGroupSync.wrapperName(limit)).isEqualTo("islandia-staff-" + limit);
+    String name = limit + "v";
+    assertThat(StaffGroupSync.wrapperName(name)).startsWith("islandia-staff-~").hasSize(36)
+        .isEqualTo(StaffGroupSync.wrapperName(name)).isNotEqualTo(StaffGroupSync.wrapperName(name + "w"));
+    assertThat(StaffGroupSync.wrapperName("media.community")).startsWith("islandia-staff-~");
+  }
+
+  @Test
   void only_removes_the_last_staff_grant_and_preserves_paid_independent_and_scoped_nodes() {
     var data = mock(NodeMap.class);
     var user = mock(User.class);
